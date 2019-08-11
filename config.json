@@ -1,0 +1,46 @@
+{
+        "config": {
+                "apps": [{
+                                "app_id": 1,
+                                "type": "docker",
+                                "docker_scratch_folder": "/tmp",
+                                "docker_container_name": "ubuntu",
+                                "docker_image_name": "ubuntu:latest",
+                                "docker_image_url": "http://11.11.11.2:9090/ubuntu.tar",
+                                "docker_image_action": "import",
+                                "docker_mount_volumes": [{
+                                                "netns_mount": {
+                                                        "host": "/var/run/netns",
+                                                        "container": "/var/run/netns"
+                                                }
+                                        },
+                                        {
+                                                "config_mount": {
+                                                        "host": "/misc/app_host/ubuntu",
+                                                        "container": "/root/ubuntu"
+                                                }
+                                        },
+                                        {
+                                                "misc_mounts": [{
+                                                                "host": "",
+                                                                "container": ""
+                                                        },
+                                                        {
+                                                                "host": "",
+                                                                "container": ""
+                                                        },
+                                                        {
+                                                                "host": "",
+                                                                "container": ""
+                                                        }
+                                                ]
+                                        }
+                                ],
+                                "docker_cmd": "bash",
+                                "docker_run_misc_options": "--hostname=rtr1 --restart=always --cap-add=SYS_ADMIN",
+                                "enable_ha_standby": "true",
+                                "reload_capable": "true"
+                        }
+                ]
+        }
+}
