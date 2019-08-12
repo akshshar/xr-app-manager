@@ -22,6 +22,9 @@ from ctypes import cdll
 libc = cdll.LoadLibrary('libc.so.6')
 _setns = libc.setns
 CLONE_NEWNET = 0x40000000
+#Set default app_manager loop interval =  15 seconds
+APP_MANAGER_LOOP_INTERVAL = 15
+APP_MANAGER_LOOP_INTERVAL_STDBY = 30
 EXIT_FLAG = False
 
 # POSIX signal handler to ensure we shutdown cleanly
@@ -32,9 +35,13 @@ def handler(app_manager,signum, frame):
         EXIT_FLAG = True
         with open("/misc/app_host/output.txt", "w") as text_file:
             text_file.write("Cleaning up....")
-        app_manager.syslogger.info("Cleaning up...")
-        sys.exit(0)
+        app_manager.poison_pill = True
 
+        for thread in app_manager.threadList:
+            app_manager.syslogger.info("Waiting for %s to finish..." %(thread.name))
+            thread.join()
+        app_manager.syslogger.info("Cleaning up...")
+        return
 
 class AppManager(ZtpHelpers):
     
@@ -52,13 +59,18 @@ class AppManager(ZtpHelpers):
             sys.exit(1)
         else:
             self.config_file = config_file
-            with open(self.config_file, 'r') as json_config_fd:
-                self.config = json.load(json_config_fd)
 
-        self.setup_apps()
-        #self.method_mapper = { 'spin_up_docker' : self.spin_up_docker}
-        # Initialize the parent ZtpHelpers class as well
 
+        self.poison_pill = False
+        self.threadList = []
+
+        for fn in [self.setup_apps]:
+            thread = threading.Thread(target=fn, args=())
+            self.threadList.append(thread)
+            thread.daemon = True                            # Daemonize thread
+            thread.start()                                  # Start the execution
+
+        #self.setup_apps(config_file)
 
     def valid_path(self, file_path):
         return os.path.isfile(file_path)
@@ -127,10 +139,10 @@ class AppManager(ZtpHelpers):
             
 
         if current_active_rp.strip() == my_node_name.strip():
-            self.syslogger.info("Cron Job: I am the current RP, take action")
+            self.syslogger.info("I am the current RP, take action")
             return {"status" : "success", "output" : True, "warning" : ""}    
         else:
-            self.syslogger.info("Cron Job: I am not the current RP")
+            self.syslogger.info("I am not the current RP")
             return {"status" : "error", "output" : False, "warning" : ""} 
 
 
@@ -197,23 +209,24 @@ class AppManager(ZtpHelpers):
 
 
 
-    def scp_to_standby(self, src_file_path=None, dest_file_path=None):
+    def scp_to_standby(self, dir_sync=False, src_path=None, dest_path=None):
         """User defined method in Child Class
            Used to scp files from active to standby RP.
            
            leverages the get_peer_rp_ip() method above.
            Useful to keep active and standby in sync with files 
            in the linux environment.
-           :param src_file_path: Source file location on Active RP 
-           :param dest_file_path: Destination file location on Standby RP 
-           :type src_file_path: str 
-           :type dest_file_path: str 
+           :param dir_sync: Flag to sync directory using the recursive -r option for scp
+           :param src_path: Source directory/file location on Active RP 
+           :param dest_path: Destination directory/file location on Standby RP 
+           :type src_path: str 
+           :type dest_path: str 
            :return: Return a dictionary with status based on scp result. 
                     { 'status': 'error/success' }
            :rtype: dict
         """
 
-        if any([src_file_path, dest_file_path]) is None:
+        if any([src_path, dest_path]) is None:
             self.syslogger.info("Incorrect File path\(s\)") 
             return {"status" : "error"}
 
@@ -222,12 +235,17 @@ class AppManager(ZtpHelpers):
         if standby_ip["status"] == "error":
             return {"status" : "error"}
         else:
-            self.syslogger.info("Transferring file "+str(src_file_path)+" from Active RP to standby location: " +str(dest_file_path))
-            cmd = "ip netns exec xrnns scp "+str(src_file_path)+ " root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_file_path)
+            self.syslogger.info("Transferring "+str(src_path)+" from Active RP to standby location: " +str(dest_path))
+            if dir_sync:
+                self.syslogger.info("Copying entire directory and its subdirectories to standby")
+                cmd = "ip netns exec xrnns scp -r "+str(src_path)+ "/* root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
+            else:
+                self.syslogger.info("Copying only the source file to target file location")
+                cmd = "ip netns exec xrnns scp "+str(src_path)+ " root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
             bash_out = self.run_bash(cmd)
 
             if bash_out["status"]:
-                self.syslogger.info("Failed to transfer file to standby")
+                self.syslogger.info("Failed to transfer file(s) to standby")
                 return {"status" : "error"}
             else:
                 return {"status" : "success"}
@@ -274,23 +292,47 @@ class AppManager(ZtpHelpers):
            Eventually may support multiple input methods. Currently supports the input
            json file for method_list and parameters.
         ''' 
-        
-        try:
-            self.apps = self.config["config"]["apps"]  
-            for app in self.apps:
-                method_obj = getattr(self, str("manage_")+app["type"]+"_apps")
-                app.pop("type")
-                method_out = method_obj(**app)
-                if method_out["status"] == "error":
-                    self.syslogger.info("Error executing method " +str(method_obj.__name__)+ " for app with id: "+ app["app_id"] + ", error:" + method_out["output"])
-                    return {"status" : "error", "output" : method_out["output"]}
-                else:
-                    self.syslogger.info("Result of app setup method:" +str(method_obj.__name__)+" for app with id: "+ app["app_id"] + " is " + method_out["output"])
-            return {"status" : "success", "output" : "Successfully executed all cron methods"}
-        except Exception as e:
-            self.syslogger.info("Failure while setting up apps: " + str(e))
-            return {"status" : "error", "output" : str(e)}
 
+       # This method is started as a daemon thread.
+       # Keeps running a loop to automatically load an updated json config file if it changes
+ 
+        while True:
+            # Look for a poison pill in case of termination
+            if self.poison_pill:
+                self.syslogger.info("Received poison pill, terminating app setup thread")
+                return 
+
+            # Only try to bring up apps on an active RP
+
+            check_RP_status =  self.is_active_rp()
+
+            if check_RP_status["status"] == "success":
+                if not check_RP_status["output"]:
+                    self.syslogger.info("Currently running on Standby RP, skipping app bringup. Sleep and Retry")
+                    if "app_manager_loop_interval_stdby" in list(self.config["config"].keys()):
+                        APP_MANAGER_LOOP_INTERVAL_STDBY = self.config["config"]["app_manager_loop_interval_stdby"]
+
+                    time.sleep(APP_MANAGER_LOOP_INTERVAL_STDBY) 
+            try:
+                with open(self.config_file, 'r') as json_config_fd:
+                    self.config = json.load(json_config_fd)
+
+                if "app_manager_loop_interval" in list(self.config["config"].keys()):
+                    APP_MANAGER_LOOP_INTERVAL = self.config["config"]["app_manager_loop_interval"]
+
+                self.apps = self.config["config"]["apps"]  
+                for app in self.apps:
+                    method_obj = getattr(self, str("manage_")+app["type"]+"_apps")
+                    app.pop("type")
+                    method_out = method_obj(**app)
+                    if method_out["status"] == "error":
+                        self.syslogger.info("Error executing method " +str(method_obj.__name__)+ " for app with id: "+ app["app_id"] + ", error:" + method_out["output"])
+                    else:
+                        self.syslogger.info("Result of app setup method:" +str(method_obj.__name__)+" for app with id: "+ app["app_id"] + " is " + method_out["output"])
+            except Exception as e:
+                self.syslogger.info("Failure while setting up apps: " + str(e))
+
+            time.sleep(APP_MANAGER_LOOP_INTERVAL)
             
 
     def check_docker_running(self, docker_name):
@@ -323,6 +365,27 @@ class AppManager(ZtpHelpers):
         return {"status" : False}
      
 
+    def docker_image_present(self, image_tag=None):
+
+        if image_tag is None:
+            return{"status": "error",
+                   "output": "No image tag provided, cannot check if docker image is present on current RP"}
+        else:
+            # Check that the expected docker image is available in local registry
+            cmd = "docker inspect --type=image " + str(image_tag) + " 2> /dev/null"
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+            out, err = process.communicate()
+
+            if process.returncode:
+                self.syslogger.info("Failed to inspect docker image")
+                return {"status" : "error", "output" : "Failed to inspect docker image"}
+            else:
+                self.syslogger.info("Docker inspect command successful")
+                if image_tag in json.loads(out)[0]["RepoTags"]:
+                    self.syslogger.info("Docker image with name: "+str(image_tag)+" now available")
+                    return {"status" : "success", "output" : "Docker image with tag: "+str(image_tag)+" is present locally on RP"}
+
+
     def update_docker_config(self,
                              app_id=None,
                              key=None,
@@ -334,6 +397,7 @@ class AppManager(ZtpHelpers):
                     self.config["config"]["apps"][app_index][key] = value
                     break
                 app_index=app_index+1
+ 
             try:
                 # Write updated config to input json file. This will set it up for switchover scenarios
                 with open(self.config_file, "w") as input_config_fd:
@@ -346,14 +410,25 @@ class AppManager(ZtpHelpers):
             self.syslogger.info("Updated key= "+str(key)+" with value=" +str(value)+ " for app with app_id="+str(app_id))
             return {"status" : "error", "output" : "Unable to update config for app with app_id: "+str(app_id)}
 
-    def setup_json_standby():
+    def setup_json_standby(self):
         # Set up a json file with pointers to local file-based artifacts on current standby during 
         # app_setup on active RP
          
-         
+        # Since the input json config file on active RP is updated during setup, just copy over the 
+        # current updated file to an equivalent location on standby RP.
 
-    def enable_ha_standby():
+        # Determine the absolute path of the current config file
         
+        config_file_path = os.path.abspath(self.config_file)
+        scp_output = self.scp_to_standby(src_path=config_file_path, 
+                                         dest_path=config_file_path)
+
+        if scp_output["status"] == "error":
+            self.syslogger.info("Failed to set up json config file on Standby RP")
+            return {"status" : "error"}
+        else:
+            self.syslogger.info("Successfully set up json config file on standby RP")             
+            return {"status" : "success"}              
 
 
     def reload_capable():
@@ -389,6 +464,26 @@ class AppManager(ZtpHelpers):
                     self.syslogger.info("No Docker registry, image url or image file path specified")
                     return {"status" : "error", "output" : "Docker image path,url or registry not provided"}
 
+        # Config files may change during operation, periodically sync config_mount volume to standby
+        # during each iteration of the thread
+
+        if docker_mount_volumes is not None:
+            try:
+                if "config_mount" in docker_mount_volumes:
+                    mount_index = docker_mount_volumes.index("config_mount") 
+                    config_mount_sync = self.scp_to_standby(dir_sync=True,
+                                                            src_path=docker_mount_volumes[mount_index],
+                                                            dest_path=docker_mount_volumes[mount_index])
+                    if config_mount_sync["status"] == "error":
+                        self.syslogger.info("Failed to sync config mount to standby RP")
+                        return {"status" : "error", "output" : "Failed to sync config mount for docker container."}
+                    else:
+                        self.syslogger.info("Successfully synced config mount to standby RP")
+            except Exception as e:
+                self.syslogger.info("Exception while syncing config mount to standby RP. Error is: "+str(e))
+                return {"status" : "error", "output" : "Exception while syncing config mount to standby RP"} 
+        
+ 
         if self.check_docker_running(docker_container_name)["status"]:
             self.syslogger.info("Skip app bringup, app already running")
             return {"status" : "success", "output" : "Docker container already running"}
@@ -399,10 +494,11 @@ class AppManager(ZtpHelpers):
                                                   docker_registry,
                                                   docker_image_url,
                                                   docker_image_filepath,
-                                                  docker_image_action)
+                                                  docker_image_action,
+                                                  enable_ha_standby)
             if image_setup["status"] == "error":
                 self.syslogger.info("Failed to set up docker image. Error is " +str(image_setup["output"]))
-                return {"status" : "error", "output" : "Failed to set up docker image"}
+                return {"status" : "error", "output" : "Failed to set up docker image with tag: "+str(docker_image_name)}
             else:
                 self.syslogger.info("Docker image set up successfully, proceeding with docker bring-up")
                 
@@ -411,14 +507,19 @@ class AppManager(ZtpHelpers):
                                                                 docker_run_misc_options) 
                 if container_setup["status"] == "error":
                     self.syslogger.info("Failed to launch the docker app")
-                    return {"status" : "error", "output" : "Failed to launch the docker app"}
                 else:
                     self.syslogger.info("Docker app successfully launched")
                     # Check if the enable_ha_standby flag is set
                     if enable_ha_standby:
                         # Set up the current (updated) json config file for the app_manager running on standby
-                         
-                     
+                        json_file_standby = self.setup_json_standby()
+                        if json_file_standby["status"] == "success":
+                            self.syslogger.info("Synced json input file to standby")
+                        else:
+                            self.syslogger.info("Failed to sync json input file to standby")
+ 
+                        
+                        
     def fetch_docker_image(self,
                            app_id=None,
                            docker_scratch_folder="/tmp",
@@ -426,7 +527,8 @@ class AppManager(ZtpHelpers):
                            docker_registry=None,
                            docker_image_url=None,
                            docker_image_filepath=None,
-                           docker_image_action="import"):
+                           docker_image_action="import",
+                           enable_ha_standby=False):
 
         # Current RP could be active RP during initial deplopyment (registry, url, filepath all OK) or
         # a standby RP that just become active (filepath only option as set up by THEN active RP).
@@ -514,25 +616,21 @@ class AppManager(ZtpHelpers):
                     self.syslogger.info("Docker tarball loaded successfully")
 
 
-            # Check that the expected docker image is available in local registry
-            cmd = "docker inspect --type=image " + str(docker_image_name) + " 2> /dev/null"
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-            out, err = process.communicate()
-
-            if process.returncode:
-                self.syslogger.info("Failed to inspect docker image")
-                return {"status" : "error", "output" : "Failed to inspect docker image"}
-            else:
-                self.syslogger.info("Docker inspect command successful")
-                if docker_image_name in json.loads(out)[0]["RepoTags"]:
-                    self.syslogger.info("Docker image with name: "+str(docker_image_name)+" now available") 
-                    return {"status" : "success", "output" : "Docker image with name: "+str(docker_image_name)+" now available"} 
+                check_image = self.docker_image_present(docker_image_name)
+                if check_image["status"] == "error":
+                    self.syslogger.info("Docker image not available, some error occured. Will retry in next iteration")
+                    return {"status" : "error", "output" : "Docker image not available. Will retry in next iteration"}
+                else:
+                    self.syslogger.info("Docker image is now available on current Active RP")
+                
+                    # If enable_ha_standby is set, sync docker image to standby
+                    if enable_ha_standby:
                 else:
                     self.syslogger.info("Docker image with name: "+str(docker_image_name)+" not available despite successful import/load")
-                    return {"status" : "success", "output" : "Docker image with name: "+str(docker_image_name)+" not available despite successful import/load"}
+                    return {"status" : "error", "output" : "Docker image with name: "+str(docker_image_name)+" not available despite successful import/load"}
         except Exception as e:
             self.syslogger.info("Failed to load/import Docker image. Error is "+str(e))
-            return {"status" : "success", "output" : "Failed to load/import Docker image"}
+            return {"status" : "error", "output" : "Failed to load/import Docker image"}
 
 
     def launch_docker_container(self,
@@ -602,4 +700,5 @@ if __name__ == "__main__":
 
     # The process main thread does nothing but wait for signals
     signal.pause()
-                                                           
+                                                          
+    sys.exit(0) 

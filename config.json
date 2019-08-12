@@ -1,5 +1,6 @@
 {
         "config": {
+                "app_manager_loop_interval" : "15",
                 "apps": [{
                                 "app_id": 1,
                                 "type": "docker",
