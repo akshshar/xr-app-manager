@@ -104,7 +104,6 @@ class AppManager(ZtpHelpers):
                 return {"status" : 1, "output" : "", "error" : "No bash command provided"}
 
             status = process.returncode
-            self.syslogger.info({"status" : status, "output" : out, "error" : err})
 
             return {"status" : status, "output" : out, "error" : err}
 
@@ -128,14 +127,14 @@ class AppManager(ZtpHelpers):
                 return {"status" : "error", "output" : "", "warning" : "Failed to get Active RP, error: " + str(e)}
 
         cmd = "/sbin/ip netns exec xrnns /pkg/bin/node_list_generation -f MY"
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        out, err = process.communicate()
+
+        get_node_name = self.run_bash(cmd) 
         my_node_name = ''
 
-        if not process.returncode:
-            my_node_name = out
+        if not get_node_name["status"]:
+            my_node_name = get_node_name["output"]
         else:
-            self.syslogger.info("Failed to get My Node Name")
+            self.syslogger.info("Failed to get My Node Name. Output: "+str(get_node_name["output"])+", Error: "+str(get_node_name["output"]))
             
 
         if current_active_rp.strip() == my_node_name.strip():
@@ -143,7 +142,7 @@ class AppManager(ZtpHelpers):
             return {"status" : "success", "output" : True, "warning" : ""}    
         else:
             self.syslogger.info("I am not the current RP")
-            return {"status" : "error", "output" : False, "warning" : ""} 
+            return {"status" : "success", "output" : False, "warning" : ""} 
 
 
 
@@ -241,10 +240,10 @@ class AppManager(ZtpHelpers):
             # See: http://stackoverflow.com/questions/11985008/sending-a-large-file-with-scp-to-a-certain-server-stalls-at-exactly-2112-kb
 
             # Grab original MTU of eth-vf1 in xrnns:
-            cmd = "cat /sys/class/net/eth-vf1/mtu"
+            cmd = "ip netns exec xrnns cat /sys/class/net/eth-vf1/mtu"
             mtu_value = self.run_bash(cmd)
 
-            if mtu_value["status"] == "error":
+            if mtu_value["status"]:
                 self.syslogger.info("Failed to grab MTU of eth-vf1, aborting. Output: "+str(mtu_value["output"])+", Error: "+str(mtu_value["error"]))
             else: 
                 eth_vf1_mtu = mtu_value["output"]
@@ -256,7 +255,6 @@ class AppManager(ZtpHelpers):
             else:
                 self.syslogger.info("Copying only the source file to target file location")
                 cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu 1492 && ip netns exec xrnns scp -o ConnectTimeout=300 "+str(src_path)+ " root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
-            self.syslogger.info(cmd)
             bash_out = self.run_bash(cmd)
 
             if bash_out["status"]:
@@ -315,14 +313,26 @@ class AppManager(ZtpHelpers):
            json file for method_list and parameters.
         ''' 
 
+        global APP_MANAGER_LOOP_INTERVAL
+        global APP_MANAGER_LOOP_INTERVAL_STDBY
        # This method is started as a daemon thread.
        # Keeps running a loop to automatically load an updated json config file if it changes
  
         while True:
+            self.syslogger.info("Back to the top...")
             # Look for a poison pill in case of termination
             if self.poison_pill:
                 self.syslogger.info("Received poison pill, terminating app setup thread")
                 return 
+
+            try:
+            # Periodically load up config file to accomodate changes as part of the main thread loop 
+                with open(self.config_file, 'r') as json_config_fd:
+                    self.config = json.load(json_config_fd)
+            except Exception as e:
+                self.syslogger.info("Failed to load config file. Sleep and retry")
+                time.sleep(60)
+                continue
 
             # Only try to bring up apps on an active RP
 
@@ -334,11 +344,11 @@ class AppManager(ZtpHelpers):
                     if "app_manager_loop_interval_stdby" in list(self.config["config"].keys()):
                         APP_MANAGER_LOOP_INTERVAL_STDBY = self.config["config"]["app_manager_loop_interval_stdby"]
 
+                    self.syslogger.info("Sleeping for seconds: "+str(APP_MANAGER_LOOP_INTERVAL_STDBY))
                     time.sleep(int(APP_MANAGER_LOOP_INTERVAL_STDBY)) 
+                    self.syslogger.info("Continuing.....")
+                    continue
             try:
-                with open(self.config_file, 'r') as json_config_fd:
-                    self.config = json.load(json_config_fd)
-
                 if "app_manager_loop_interval" in list(self.config["config"].keys()):
                     APP_MANAGER_LOOP_INTERVAL = self.config["config"]["app_manager_loop_interval"]
 
@@ -363,15 +373,10 @@ class AppManager(ZtpHelpers):
         cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker ps -f name="+str(docker_name)
 
         docker_status = self.run_bash(cmd)
-        #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        #out, err = process.communicate()
-
-        #if not process.returncode:
-        if docker_status["status"] == "success":
-            docker_state = docker_status["output"] 
-        else:
+        if docker_status["status"]:
             self.syslogger.info("Failed to get docker state. Output: "+str(docker_status["output"])+", Error: "+str(docker_status["error"]))
-
+        else:
+            docker_state = docker_status["output"]
      
         output_list = []
         output = ''
@@ -398,11 +403,8 @@ class AppManager(ZtpHelpers):
             # Check that the expected docker image is available in local registry
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker inspect --type=image " + str(image_tag) + " 2> /dev/null"
             docker_inspect = self.run_bash(cmd)
-            #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-            #out, err = process.communicate()
 
-            #if process.returncode:
-            if docker_inspect["status"] == "error":
+            if docker_inspect["status"]:
                 self.syslogger.info("Failed to inspect docker image. Output: "+str(docker_inspect["output"])+", Error: "+str(docker_inspect["output"]))
                 return {"status" : "error", "output" : "Failed to inspect docker image"}
             else:
@@ -587,27 +589,27 @@ docker_container_name,
                         self.syslogger.info("Failed to copy image to the scratch folder. Error is "+str(e))
                         return {"status": "error",  "output" : "Failed to copy and load docker tarball, bailing out"}
                 else: 
-                    self.syslogger.info("Docker tarball filepath not valid")
-                    return {"status": "error",  "output" : "Unable to copy and load docker tarball, invalid path."}
-            elif docker_image_url is not None:
-                docker_download = self.download_file(docker_image_url, destination_folder=docker_scratch_folder)
+                    self.syslogger.info("Docker tarball filepath not valid, Trying the docker_image_url if present")
+                    #return {"status": "error",  "output" : "Unable to copy and load docker tarball, invalid path."}
+                    if docker_image_url is not None:
+                        docker_download = self.download_file(docker_image_url, destination_folder=docker_scratch_folder)
  
-                if docker_download["status"] == "error":
-                    self.syslogger.info("Failed to download docker container tar ball")
-                    return {"status" : "error", "output" : "Failed to download docker tar ball from url"} 
-                else:
-                    filename = docker_download["filename"]
-                    folder = docker_download["folder"]
-                    filepath = os.path.join(folder, filename)
-
-                    # Update the filepath to reflect the scratch folder location
-                    update_app = self.update_docker_config(app_id, key="docker_image_filepath", value=filepath)
-
-                    if update_app["status"] == "error":
-                        self.syslogger.info("App_id: "+str(app_id)+"Failed to update app configuration, aborting...")
-                        return {"status": "error",  "output" : "App_id: "+str(app_id)+"Failed to update app configuration, aborting..."}
+                    if docker_download["status"] == "error":
+                        self.syslogger.info("Failed to download docker container tar ball")
+                        return {"status" : "error", "output" : "Failed to download docker tar ball from url"} 
                     else:
-                        self.syslogger.info("App_id: "+str(app_id)+"Successfully updated app configuration ")
+                        filename = docker_download["filename"]
+                        folder = docker_download["folder"]
+                        filepath = os.path.join(folder, filename)
+
+                        # Update the filepath to reflect the scratch folder location
+                        update_app = self.update_docker_config(app_id, key="docker_image_filepath", value=filepath)
+
+                        if update_app["status"] == "error":
+                            self.syslogger.info("App_id: "+str(app_id)+"Failed to update app configuration, aborting...")
+                            return {"status": "error",  "output" : "App_id: "+str(app_id)+"Failed to update app configuration, aborting..."}
+                        else:
+                            self.syslogger.info("App_id: "+str(app_id)+"Successfully updated app configuration ")
                      
             elif docker_registry is not None:
                 # docker_registry is expected to be a dictionary specifying:
@@ -624,30 +626,17 @@ docker_container_name,
             if docker_image_action == "import": 
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker import " +str(filepath)+ "  " + str(docker_image_name)
                 docker_image_op = self.run_bash(cmd)
-                #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-                #out, err = process.communicate()
 
-                if docker_image_op["status"] == "error":
-                #if process.returncode:
+                if docker_image_op["status"]:
                     self.syslogger.info("Failed to import docker image. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))
                     return {"status" : "error", "output" : "Failed to import docker image"} 
                 else:
                     self.syslogger.info("Docker image import command ran successfully")
-                    #Clean up any dangling images in case image was already present
-                    cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\")"
-                    rm_dangling_images=self.run_bash(cmd)
-                    if rm_dangling_images["status"] == "success":
-                        self.syslogger.info("Removed dangling docker images post docker import")
-                    else:
-                        self.syslogger.info("Failed to remove dangling docker images. Output: "+str(rm_dangling_images["output"])+" Error: "+str(rm_dangling_images["error"]))
             elif docker_image_action == "load":
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker load --input " +str(filepath)
                 docker_image_op = self.run_bash(cmd)
-                #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-                #out, err = process.communicate()
 
-                if docker_image_op["status"] == "error":
-                #if process.returncode:
+                if docker_image_op["status"]:
                     self.syslogger.info("Failed to load docker tarball. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))
                     return {"status" : "error", "output" : "Failed to load docker tarball"} 
                 else: 
@@ -686,24 +675,26 @@ docker_container_name,
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
             docker_rm = self.run_bash(cmd)
-            #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-            #out, err = process.communicate()
-            #if process.returncode:
-            if docker_rm["status"] == "error": 
+            if docker_rm["status"]: 
                 self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
         except Exception as e:
             self.syslogger.info("Failed to remove dormant container with same name. Error is: " +str(e)) 
             return {"status" : "error", "output" : "Failed to remove dormant container with same name"}
 
+        #Clean up any dangling images in case image was already present
+        cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\")"
+        rm_dangling_images=self.run_bash(cmd)
+        if rm_dangling_images["status"]:
+            self.syslogger.info("Failed to remove dangling docker images, but continuing.Output: "+str(rm_dangling_images["output"])+" Error: "+str(rm_dangling_images["error"]))
+        else:
+            self.syslogger.info("Removed dangling docker images")
+
         # Spin up the container
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker run "+ str(docker_run_misc_options)+ " --name " +str(docker_container_name) + " " + str(docker_image_name) + " " + str(docker_cmd) 
             docker_launch = self.run_bash(cmd)
-            #process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-            #out, err = process.communicate()
 
-            if docker_launch["status"] == "error":
-            #if process.returncode:
+            if docker_launch["status"]:
                 self.syslogger.info("Failed to spin up the docker container. Output: "+str(docker_launch["output"])+", Error: "+str(docker_launch["error"]))
                 return {"status" : "error", "output" : "Failed to spin up the docker container"}
             else:

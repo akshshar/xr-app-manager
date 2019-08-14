@@ -38,7 +38,7 @@
                                         }
                                 ],
                                 "docker_cmd": "bash",
-                                "docker_run_misc_options": "--hostname=rtr1 --restart=always --cap-add=SYS_ADMIN",
+                                "docker_run_misc_options": "-itd --hostname=rtr1 --restart=always --cap-add=SYS_ADMIN",
                                 "enable_ha_standby": "true",
                                 "reload_capable": "true"
                         }
