@@ -15,7 +15,6 @@
 
 # pull in sysconfig settings
 
-set -x
 NAME=app_manager
 PIDFILE=/var/run/$NAME.pid
 DAEMON=/usr/sbin/app_manager.py
@@ -80,8 +79,8 @@ case "$1" in
                 do_stop
                 case "$?" in
                     0|1)
-                        echo -n "App Manager Daemon stopped successfully\n"
-                        do_start
+                        echo -n "App Manager Daemon stopped successfully.\n"
+			do_start
                         case "$?" in
                                 0|1) echo "App Manager Daemon started successfully"  ;;
                                 *) echo "Failed to start App Manager Daemon " ;; # Failed to start
