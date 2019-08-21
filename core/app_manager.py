@@ -251,6 +251,15 @@ class AppManager(ZtpHelpers):
             self.syslogger.info("Transferring "+str(src_path)+" from Active RP to standby location: " +str(dest_path))
             if dir_sync:
                 self.syslogger.info("Copying entire directory and its subdirectories to standby")
+                self.syslogger.info("Force create destination directory, ignore error")
+                cmd = "mkdir -p "+str(dest_path)
+                standby_bash_cmd = self.execute_cmd_on_standby(cmd = cmd)
+
+                if standby_bash_cmd["status"] == "error":
+                    self.syslogger.info("Failed to execute bash cmd: \""+str(cmd)+"\" on the standby RP. Output: "+str(standby_bash_cmd["output"])+". Error: "+str(standby_bash_cmd["error"])+". Ignoring....")
+                else:
+                    self.syslogger.info("Successfully executed bash cmd: \""+str(cmd)+"\" on the standby RP. Output: "+str(standby_bash_cmd["output"]))
+
                 cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu 1492 && ip netns exec xrnns scp -o ConnectTimeout=300 -r "+str(src_path)+ "/* root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
             else:
                 self.syslogger.info("Copying only the source file to target file location")
@@ -495,16 +504,16 @@ class AppManager(ZtpHelpers):
 
         if docker_mount_volumes is not None:
             try:
-                if "config_mount" in docker_mount_volumes:
-                    mount_index = docker_mount_volumes.index("config_mount")
-                    config_mount_sync = self.scp_to_standby(dir_sync=True,
-                                                            src_path=docker_mount_volumes[mount_index],
-                                                            dest_path=docker_mount_volumes[mount_index])
-                    if config_mount_sync["status"] == "error":
-                        self.syslogger.info("Failed to sync config mount to standby RP")
-                        return {"status" : "error", "output" : "Failed to sync config mount for docker container."}
-                    else:
-                        self.syslogger.info("Successfully synced config mount to standby RP")
+                for mount_map in docker_mount_volumes: 
+                    if "config_mount" in list(mount_map.keys()):
+                        config_mount_sync = self.scp_to_standby(dir_sync=True,
+                                                                src_path=mount_map["config_mount"]["host"],
+                                                            dest_path=mount_map["config_mount"]["host"])
+                        if config_mount_sync["status"] == "error":
+                            self.syslogger.info("Failed to sync config mount to standby RP")
+                            return {"status" : "error", "output" : "Failed to sync config mount for docker container."}
+                        else:
+                            self.syslogger.info("Successfully synced config mount to standby RP")
             except Exception as e:
                 self.syslogger.info("Exception while syncing config mount to standby RP. Error is: "+str(e))
                 return {"status" : "error", "output" : "Exception while syncing config mount to standby RP"}
@@ -529,7 +538,8 @@ class AppManager(ZtpHelpers):
                 self.syslogger.info("Docker image set up successfully, proceeding with docker bring-up")
 
                 container_setup =  self.launch_docker_container(docker_image_name,
-docker_container_name,
+                                                                docker_container_name,
+                                                                docker_mount_volumes,
                                                                 docker_cmd,
                                                                 docker_run_misc_options)
                 if container_setup["status"] == "error":
@@ -688,6 +698,7 @@ docker_container_name,
     def launch_docker_container(self,
                                 docker_image_name=None,
                                 docker_container_name=None,
+                                docker_mount_volumes=None,
                                 docker_cmd=None,
                                 docker_run_misc_options=None):
         # We don't know why the container died, so remove properly before continuing
@@ -708,9 +719,33 @@ docker_container_name,
         else:
             self.syslogger.info("Removed dangling docker images")
 
+        # Set up Docker mount volumes if specified
+
+        try:
+            docker_mount_options = ""
+            if docker_mount_volumes is not None:
+                for mount_map in docker_mount_volumes:
+                    if "netns_mount" in list(mount_map.keys()):
+                        mount_cmd = " -v "+str(mount_map["netns_mount"]["host"])+":"+str(mount_map["netns_mount"]["container"])+" "
+                        docker_mount_options += str(mount_cmd)
+                    if "config_mount" in list(mount_map.keys()):
+                        mount_cmd = " -v "+str(mount_map["config_mount"]["host"])+":"+str(mount_map["config_mount"]["container"])+" "
+                        docker_mount_options += str(mount_cmd)
+                    if "misc_mounts" in list(mount_map.keys()):
+                        for mount in mount_map["misc_mounts"]:
+                            if mount["host"] != "" and mount["container"] != "":
+                                mount_host = mount["host"]
+                                mount_container = mount["container"]
+                                mount_cmd = " -v "+str(mount_host)+":"+str(mount_container)+" "
+                                docker_mount_options += str(mount_cmd)
+        except Exception as e:
+            self.syslogger.info("Failed to determine mount for the docker container. Error is: "+str(e))
+            return {"status" : "error", "output" : "Failed to determine mount for the docker container"}
+
         # Spin up the container
         try:
-            cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker run "+ str(docker_run_misc_options)+ " --name " +str(docker_container_name) + " " + str(docker_image_name) + " " + str(docker_cmd)
+            cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker run "+ str(docker_mount_options)+" "+ str(docker_run_misc_options)+ " --name " +str(docker_container_name) + " " + str(docker_image_name) + " " + str(docker_cmd)
+            self.syslogger.info("Docker Launch command: "+str(cmd))
             docker_launch = self.run_bash(cmd)
 
             if docker_launch["status"]:
