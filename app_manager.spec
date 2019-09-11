@@ -26,6 +26,9 @@ install -m644 config.json %{buildroot}/etc/app_manager
 mkdir -p %{buildroot}/etc/rc.d/init.d
 install -m755 sysvinit/app_manager.sh %{buildroot}/etc/rc.d/init.d/app_manager 
 
+mkdir -p %{buildroot}/etc/logrotate.d
+install -m755 logrotate/app_manager.conf %{buildroot}/etc/logrotate.d/app_manager.conf
+
 %files
 
 %defattr(-,root,root)
@@ -33,11 +36,12 @@ install -m755 sysvinit/app_manager.sh %{buildroot}/etc/rc.d/init.d/app_manager
 %{_sbindir}/standby_install.py
 /etc/app_manager/config.json
 /etc/rc.d/init.d/app_manager
+/etc/logrotate.d/app_manager.conf
 
 %post
 chkconfig --add app_manager
 # Mutiple files can be specified for scp to standby
-%{_sbindir}/standby_install.py --file /etc/rc.d/init.d/app_manager --file %{_sbindir}/app_manager.py
+%{_sbindir}/standby_install.py --file /etc/rc.d/init.d/app_manager --file %{_sbindir}/app_manager.py --file /etc/logrotate.d/app_manager.conf
 
 # standby_install.py can be used to run bash commands on standby. Use this to create directories before trying to copy them over scp.
 # Remember, bash commands are always executed at the end by standby_install.py. So decouple bash commands that are a prerequisite for any scp operation

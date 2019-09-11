@@ -481,7 +481,7 @@ class AppManager(ZtpHelpers):
                            docker_mount_volumes=None,
                            docker_cmd=None,
                            docker_run_misc_options=None,
-                           enable_ha_standby=False,
+                           sync_to_standby=False,
                            reload_capable=False):
 
         if docker_image_name is None:
@@ -530,7 +530,7 @@ class AppManager(ZtpHelpers):
                                                   docker_image_url,
                                                   docker_image_filepath,
                                                   docker_image_action,
-                                                  enable_ha_standby)
+                                                  sync_to_standby)
             if image_setup["status"] == "error":
                 self.syslogger.info("Failed to set up docker image. Error is " +str(image_setup["output"]))
                 return {"status" : "error", "output" : "Failed to set up docker image with tag: "+str(docker_image_name)}
@@ -546,8 +546,8 @@ class AppManager(ZtpHelpers):
                     self.syslogger.info("Failed to launch the docker app")
                 else:
                     self.syslogger.info("Docker app successfully launched")
-                    # Check if the enable_ha_standby flag is set
-                    if enable_ha_standby:
+                    # Check if the sync_to_standby flag is set
+                    if sync_to_standby:
                         # Set up the current (updated) json config file for the app_manager running on standby
                         json_file_standby = self.setup_json_standby()
                         if json_file_standby["status"] == "success":
@@ -567,7 +567,7 @@ class AppManager(ZtpHelpers):
                            docker_image_url=None,
                            docker_image_filepath=None,
                            docker_image_action="import",
-                           enable_ha_standby=False):
+                           sync_to_standby=False):
 
         # Current RP could be active RP during initial deplopyment (registry, url, filepath all OK) or
         # a standby RP that just become active (filepath only option as set up by THEN active RP).
@@ -679,8 +679,8 @@ class AppManager(ZtpHelpers):
             else:
                 self.syslogger.info("Docker image is now available on current Active RP")
 
-                # If enable_ha_standby is set, sync docker image to standby
-                if enable_ha_standby:
+                # If sync_to_standby is set, sync docker image to standby
+                if sync_to_standby:
                     # Copy the image tarball from the scratch folder to the same location on standby RP
                     docker_image_sync_standby = self.scp_to_standby(src_path=filepath,
                                                                     dest_path=filepath)
