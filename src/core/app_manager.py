@@ -42,6 +42,24 @@ def handler(app_manager,signum, frame):
         app_manager.syslogger.info("Cleaning up...")
         return
 
+
+class KillerThread(threading.Thread):
+  def __init__(self, pid, timeout, event ):
+    threading.Thread.__init__(self)
+    self.pid = pid
+    self.timeout = timeout
+    self.event = event
+    self.setDaemon(True)
+
+  def run(self):
+    self.event.wait(self.timeout)
+    if not self.event.is_set():
+      try:
+          os.killpg(os.getpgid(self.pid), signal.SIGTERM)
+      except OSError, e:
+        #This is raised if the process has already completed
+        pass
+
 class AppManager(ZtpHelpers):
 
     def __init__(self,
@@ -60,6 +78,39 @@ class AppManager(ZtpHelpers):
             self.config_file = config_file
 
 
+        # Read the input config.json file for the first time. It will read periodically in the app_manager thread as well.
+        try:
+            with open(self.config_file, 'r') as json_config_fd:
+                self.config = json.load(json_config_fd)
+        except Exception as e:
+            self.syslogger.info("Failed to load config file. Aborting...")
+            sys.exit(1)
+
+        # App manager is just starting, clean out rpfo.state to start afresh
+
+        if "rpfo_state_file" in list(self.config["config"].keys()):
+            self.rpfo_file = self.config["config"]["rpfo_state_file"]
+        else:
+            self.rpfo_file = "/misc/app_host/scratch/rpfo.state"
+
+        try:
+            # Remove rpfo.state file
+            os.remove(self.rpfo_file)
+        except OSError as e:
+            self.syslogger.info("Failed to delete rpfo file")
+            self.syslogger.info("Removing stale rpfo directory if created")
+            try:
+                import shutil
+                shutil.rmtree(self.rpfo_file, ignore_errors=True)
+            except Exception as e:
+                self.syslogger.info("Failed to remove stale rpfo directory")
+
+
+        self.root_lr_user="ztp-user"
+        # Check if docker daemon is reachable
+        self.check_docker_engine(start_wait_time=60, restart_count=1, terminate_count=15)
+
+        self.standby_rp_present = False
         self.poison_pill = False
         self.threadList = []
 
@@ -69,10 +120,85 @@ class AppManager(ZtpHelpers):
             thread.daemon = True                            # Daemonize thread
             thread.start()                                  # Start the execution
 
-        #self.setup_apps(config_file)
+
+
+    def check_docker_engine(self,
+                            start_wait_time=60,
+                            wait_increment=60,
+                            restart_count=3,
+                            terminate_count=10):
+        # Check if docker daemon is reachable. If not wait 2 mins and loop till it is
+        docker_engine_up=False
+        wait_time=start_wait_time
+        start_time=time.time()
+        iteration=0
+        wait_count=0
+        while True:
+            iteration+=1
+            wait_count+=1
+            if iteration == terminate_count:
+                self.syslogger.info("Unable to determine docker_engine state, giving up...")
+                #self.hostcmd(cmd="service docker stop")
+                #self.hostcmd(cmd="service docker start")
+                #time.sleep(120)
+                #cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker info"
+                #docker_engine_status = self.run_bash_timed(cmd, timeout=10)
+                #if docker_engine_status["status"]:
+                #    self.syslogger.info("Failed to get docker engine state after docker service start. Giving up.." )
+                #else:
+                #    self.syslogger.info("Docker engine running! Let's proceed...")
+                break
+            if wait_count > restart_count:
+                wait_time=start_wait_time
+                wait_count=1
+            cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker info"
+            docker_engine_status = self.run_bash_timed(cmd, timeout=10)
+            if docker_engine_status["status"]:
+                self.syslogger.info("Failed to get docker engine state. Output: "+str(docker_engine_status["output"])+", Error: "+str(docker_engine_status["error"]))
+                self.syslogger.info("Sleeping for "+str(wait_time)+" seconds before trying again...")
+                time.sleep(wait_time)
+            else:
+                self.syslogger.info("Docker engine running! Let's proceed...")
+                docker_engine_up=True
+                break
+            wait_time=wait_time+wait_increment
+
+        elapsed_time=time.time()-start_time
+        if docker_engine_up:
+            self.syslogger.info("Time taken for docker engine to be available = "+str(elapsed_time)+"seconds")
+        else:
+            self.syslogger.info("Docker engine still not up. Elapsed time: "+str(elapsed_time)+"seconds")
 
     def valid_path(self, file_path):
         return os.path.isfile(file_path)
+
+
+    def run_bash_timed(self, cmd=None, timeout=5, vrf="global-vrf", pid=1):
+        event = threading.Event()
+
+        with open(self.get_netns_path(nsname=vrf,nspid=pid)) as fd:
+            self.setns(fd, CLONE_NEWNET)
+
+            if self.debug:
+                self.logger.debug("bash cmd being run: "+cmd)
+
+            if cmd is not None:
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, preexec_fn=os.setsid)
+                killer = KillerThread(process.pid, timeout, event)
+                killer.start()
+                out, err = process.communicate()
+                event.set()
+                killer.join()
+
+                if self.debug:
+                    self.logger.debug("output: "+out)
+                    self.logger.debug("error: "+err)
+            else:
+                self.syslogger.info("No bash command provided")
+                return {"status" : 1, "output" : "", "error" : "No bash command provided"}
+
+            status = process.returncode
+            return {"status" : status, "output" : out, "error" : err}
 
     def run_bash(self, cmd=None, vrf="global-vrf", pid=1):
         """User defined method in Child Class
@@ -106,6 +232,59 @@ class AppManager(ZtpHelpers):
             status = process.returncode
 
             return {"status" : status, "output" : out, "error" : err}
+
+
+    def admincmd(self, cmd=None):
+
+        if cmd is None:
+            return {"status" : "error", "output" : "No command specified"}
+
+        status = "success"
+
+
+        if self.debug:
+            self.logger.debug("Received admin exec command request: \"%s\"" % cmd)
+
+        cmd = "export AAA_USER="+self.root_lr_user+" && source /pkg/bin/ztp_helper.sh && echo -ne \""+cmd+"\\n \" | xrcmd \"admin\""
+
+        self.syslogger.info(cmd)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+        out, err = process.communicate()
+
+
+        if process.returncode:
+            status = "error"
+            output = "Failed to get command output"
+        else:
+            output_list = []
+            output = ""
+
+            for line in out.splitlines():
+                fixed_line= line.replace("\n", " ").strip()
+                output_list.append(fixed_line)
+                if "syntax error: expecting" in fixed_line:
+                    status = "error"
+                output = filter(None, output_list)    # Removing empty items
+
+        if self.debug:
+            self.logger.debug("Exec command output is %s" % output)
+
+        self.syslogger.info(output)
+        return {"status" : status, "output" : output}
+
+
+    def hostcmd(self, cmd=None):
+        if cmd is None:
+            return {"status" : "error", "output" : "No command specified"}
+
+
+        self.syslogger.info("Received host command request: \"%s\"" % cmd)
+
+
+        result = self.admincmd(cmd="run ssh root@10.0.2.16 "+cmd)
+
+        return {"status" : result["status"], "output" : result["output"]}
+
 
 
     def is_active_rp(self):
@@ -343,35 +522,127 @@ class AppManager(ZtpHelpers):
                 time.sleep(60)
                 continue
 
+
             # Only try to bring up apps on an active RP
 
             check_RP_status =  self.is_active_rp()
 
             if check_RP_status["status"] == "success":
+            # Currently on Standby RP, wait and go back to start of loop
                 if not check_RP_status["output"]:
                     self.syslogger.info("Currently running on Standby RP, skipping app bringup. Sleep and Retry")
+                    # Create rpfo.state for apps to utilize
+
+                    # Try to read existing rpfo state
+                    try:
+                        with open(self.rpfo_file, 'r') as rpfo_state_fd:
+                            last_rpfo_state = rpfo_state_fd.read()
+
+                        self.syslogger.info("Last rpfo state: "+str(last_rpfo_state))
+                        if str(last_rpfo_state) == "active":
+                            current_rpfo_state = "standby"
+                        elif str(last_rpfo_state) == "standby":
+                            current_rpfo_state = "standby"
+                        elif str(last_rpfo_state) == "switchover":
+                            current_rpfo_state = "standby"
+                        else:
+                            current_rpfo_state = "standby"
+                    except Exception as e:
+                        self.syslogger.info("Failed to read last rpfo state. Error: "+str(e))
+                        current_rpfo_state = "standby"
+                    try:
+                        self.syslogger.info("Setting rpfo state to "+str(current_rpfo_state))
+                        # Write rpfo state
+                        with open(self.rpfo_file, "w") as rpfo_state_fd:
+                            rpfo_state_fd.write(current_rpfo_state)
+                    except Exception as e:
+                        self.syslogger.info("Failed to write rpfo state!")
+
                     if "app_manager_loop_interval_stdby" in list(self.config["config"].keys()):
                         APP_MANAGER_LOOP_INTERVAL_STDBY = self.config["config"]["app_manager_loop_interval_stdby"]
 
+                    self.syslogger.info("Removing stale running apps.....")
+
+                    try:
+                        if "remove_apps_standby" in list(self.config["config"].keys()):
+                            remove_apps_standby = self.config["config"]["remove_apps_standby"]
+                        else:
+                            remove_apps_standby = False
+
+                        self.apps = self.config["config"]["apps"]
+                        for app in self.apps:
+                            method_obj = getattr(self, str("remove_")+str(app["type"])+"_app")
+                            method_out = method_obj(**app)
+                            if method_out["status"] == "error":
+                                self.syslogger.info("Error executing method " +str(method_obj.__name__)+ " for app with id: "+ str(app["app_id"]) + ", error:" + method_out["output"])
+                            else:
+                                self.syslogger.info("Result of app manage method: " +str(method_obj.__name__)+" for app with id: "+ str(app["app_id"]) + " is: " + method_out["output"])
+                    except Exception as e:
+                        self.syslogger.info("Failure while trying to remove apps: " + str(e))
+
                     self.syslogger.info("Sleeping for seconds: "+str(APP_MANAGER_LOOP_INTERVAL_STDBY))
                     time.sleep(int(APP_MANAGER_LOOP_INTERVAL_STDBY))
-                    self.syslogger.info("Continuing.....")
                     continue
-            try:
-                if "app_manager_loop_interval" in list(self.config["config"].keys()):
-                    APP_MANAGER_LOOP_INTERVAL = self.config["config"]["app_manager_loop_interval"]
+                else:
+                    self.syslogger.info("Currently running on Active RP, register state and launch apps")
+                    # Currently on Active RP, determine if standby RP is present, register state. Then launch apps.
+                    standby_ip = self.get_peer_rp_ip()
 
-                self.apps = self.config["config"]["apps"]
-                for app in self.apps:
-                    method_obj = getattr(self, str("manage_")+str(app["type"])+"_apps")
-                    method_out = method_obj(**app)
-                    if method_out["status"] == "error":
-                        self.syslogger.info("Error executing method " +str(method_obj.__name__)+ " for app with id: "+ str(app["app_id"]) + ", error:" + method_out["output"])
+                    if standby_ip["status"] == "error":
+                        self.syslogger.info("No standby RP detected or failed to get standby RP xrnns ip")
+                        self.standby_rp_present = False
                     else:
-                        self.syslogger.info("Result of app setup method: " +str(method_obj.__name__)+" for app with id: "+ str(app["app_id"]) + " is: " + method_out["output"])
-            except Exception as e:
-                self.syslogger.info("Failure while setting up apps: " + str(e))
+                        self.standby_rp_present = True
 
+                    # Try to read existing rpfo state
+                    try:
+                        with open(self.rpfo_file, 'r') as rpfo_state_fd:
+                            last_rpfo_state = rpfo_state_fd.read()
+
+                        self.syslogger.info("Last rpfo state: "+str(last_rpfo_state))
+                        if str(last_rpfo_state) == "active":
+                            current_rpfo_state = "active"
+                        elif str(last_rpfo_state) == "standby":
+                            self.syslogger.info("Last rpfo state was standby, switchover occured. Now set it to switchover")
+                            current_rpfo_state = "switchover"
+                        elif str(last_rpfo_state) == "switchover":
+                            # If last rpfo state is switchover, then app_manager will not attempt
+                            # to change it. It is upto the app to read, process and then set to
+                            # active.
+                            self.syslogger.info("RP became active post Switchover")
+                            current_rpfo_state = "switchover"
+                        else:
+                            current_rpfo_state = "active"
+                    except Exception as e:
+                        self.syslogger.info("Failed to read last rpfo state. Error: "+str(e))
+                        current_rpfo_state = "active"
+
+
+                    try:
+                        self.syslogger.info("Setting rpfo state to "+str(current_rpfo_state))
+                        # Write rpfo state
+                        with open(self.rpfo_file, "w") as rpfo_state_fd:
+                            rpfo_state_fd.write(current_rpfo_state)
+                    except Exception as e:
+                        self.syslogger.info("Failed to write rpfo state!")
+
+                    try:
+                        if "app_manager_loop_interval" in list(self.config["config"].keys()):
+                            APP_MANAGER_LOOP_INTERVAL = self.config["config"]["app_manager_loop_interval"]
+
+                        self.apps = self.config["config"]["apps"]
+                        for app in self.apps:
+                            method_obj = getattr(self, str("manage_")+str(app["type"])+"_app")
+                            method_out = method_obj(**app)
+                            if method_out["status"] == "error":
+                                self.syslogger.info("Error executing method " +str(method_obj.__name__)+ " for app with id: "+ str(app["app_id"]) + ", error:" + method_out["output"])
+                            else:
+                                self.syslogger.info("Result of app manage method: " +str(method_obj.__name__)+" for app with id: "+ str(app["app_id"]) + " is: " + method_out["output"])
+                    except Exception as e:
+                        self.syslogger.info("Failure while setting up apps: " + str(e))
+
+            elif check_RP_status["status"] == "error":
+                self.syslogger.info("Failed to fetch RP state, try again in next iteration")
             time.sleep(int(APP_MANAGER_LOOP_INTERVAL))
 
 
@@ -381,7 +652,7 @@ class AppManager(ZtpHelpers):
 
         cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker ps -f name="+str(docker_name)
 
-        docker_status = self.run_bash(cmd)
+        docker_status = self.run_bash_timed(cmd, timeout=10)
         if docker_status["status"]:
             self.syslogger.info("Failed to get docker state. Output: "+str(docker_status["output"])+", Error: "+str(docker_status["error"]))
         else:
@@ -411,14 +682,14 @@ class AppManager(ZtpHelpers):
         else:
             # Check that the expected docker image is available in local registry
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker inspect --type=image " + str(image_tag) + " 2> /dev/null"
-            docker_inspect = self.run_bash(cmd)
+            docker_inspect = self.run_bash_timed(cmd, timeout=10)
 
             if docker_inspect["status"]:
                 self.syslogger.info("Failed to inspect docker image. Output: "+str(docker_inspect["output"])+", Error: "+str(docker_inspect["output"]))
                 return {"status" : "error", "output" : "Failed to inspect docker image"}
             else:
                 self.syslogger.info("Docker inspect command successful")
-                if image_tag in json.loads(docker_inspect["output"])[0]["RepoTags"]:
+                if image_tag in str(json.loads(docker_inspect["output"])[0]["RepoTags"]):
                     self.syslogger.info("Docker image with name: "+str(image_tag)+" now available")
                     return {"status" : "success", "output" : "Docker image with tag: "+str(image_tag)+" is present locally on RP"}
 
@@ -468,21 +739,63 @@ class AppManager(ZtpHelpers):
             return {"status" : "success"}
 
 
-    def manage_docker_apps(self,
-                           type="docker",
-                           app_id=None,
-                           docker_scratch_folder='/tmp',
-                           docker_container_name=None,
-                           docker_image_name=None,
-                           docker_registry=None,
-                           docker_image_url=None,
-                           docker_image_filepath=None,
-                           docker_image_action="import",
-                           docker_mount_volumes=None,
-                           docker_cmd=None,
-                           docker_run_misc_options=None,
-                           sync_to_standby=False,
-                           reload_capable=False):
+    def remove_docker_app(self,
+                          type="docker",
+                          app_id=None,
+                          docker_scratch_folder='/tmp',
+                          docker_container_name=None,
+                          docker_image_name=None,
+                          docker_registry=None,
+                          docker_image_url=None,
+                          docker_image_filepath=None,
+                          docker_image_action="import",
+                          docker_mount_volumes=None,
+                          docker_cmd=None,
+                          docker_run_misc_options=None,
+                          sync_to_standby=False,
+                          reload_capable=False):
+
+        # Check that the docker daemon is reachable before trying anything
+        self.check_docker_engine(start_wait_time=60, restart_count=1, terminate_count=15)
+        if docker_container_name is None:
+            self.syslogger.info("Docker container name not specified")
+            return {"status" : "error", "output" : "Docker container name not specified"}
+
+        if self.check_docker_running(docker_container_name)["status"]:
+            self.syslogger.info("Removing app")
+            try:
+                cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
+                docker_rm = self.run_bash_timed(cmd, timeout=10)
+                if docker_rm["status"]:
+                    self.syslogger.info("Failed to run docker rm -f command on container app, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
+            except Exception as e:
+                self.syslogger.info("Failed to remove app. Error is: " +str(e))
+                return {"status" : "error", "output" : "Failed to remove container"}
+            return {"status" : "success", "output" : "Docker container successfully cleaned up"}
+        else:
+            self.syslogger.info("Docker app not running. Nothing to remove.")
+            return {"status" : "success",  "output" : "Docker app not running. Nothing to remove"}
+
+
+
+    def manage_docker_app(self,
+                          type="docker",
+                          app_id=None,
+                          docker_scratch_folder='/tmp',
+                          docker_container_name=None,
+                          docker_image_name=None,
+                          docker_registry=None,
+                          docker_image_url=None,
+                          docker_image_filepath=None,
+                          docker_image_action="import",
+                          docker_mount_volumes=None,
+                          docker_cmd=None,
+                          docker_run_misc_options=None,
+                          sync_to_standby=False,
+                          reload_capable=False):
+
+        # Check that the docker daemon is reachable before trying anything
+        self.check_docker_engine(terminate_count=2)
 
         if docker_image_name is None:
             self.syslogger.info("Docker image location not specified")
@@ -502,21 +815,22 @@ class AppManager(ZtpHelpers):
         # Config files may change during operation, periodically sync config_mount volume to standby
         # during each iteration of the thread
 
-        if docker_mount_volumes is not None:
-            try:
-                for mount_map in docker_mount_volumes: 
-                    if "config_mount" in list(mount_map.keys()):
-                        config_mount_sync = self.scp_to_standby(dir_sync=True,
-                                                                src_path=mount_map["config_mount"]["host"],
-                                                            dest_path=mount_map["config_mount"]["host"])
-                        if config_mount_sync["status"] == "error":
-                            self.syslogger.info("Failed to sync config mount to standby RP")
-                            return {"status" : "error", "output" : "Failed to sync config mount for docker container."}
-                        else:
-                            self.syslogger.info("Successfully synced config mount to standby RP")
-            except Exception as e:
-                self.syslogger.info("Exception while syncing config mount to standby RP. Error is: "+str(e))
-                return {"status" : "error", "output" : "Exception while syncing config mount to standby RP"}
+        if self.standby_rp_present:
+            if docker_mount_volumes is not None:
+                try:
+                    for mount_map in docker_mount_volumes:
+                        if "config_mount" in list(mount_map.keys()):
+                            config_mount_sync = self.scp_to_standby(dir_sync=True,
+                                                                    src_path=mount_map["config_mount"]["host"],
+                                                                    dest_path=mount_map["config_mount"]["host"])
+                            if config_mount_sync["status"] == "error":
+                                self.syslogger.info("Failed to sync config mount to standby RP")
+                                return {"status" : "error", "output" : "Failed to sync config mount for docker container."}
+                            else:
+                                self.syslogger.info("Successfully synced config mount to standby RP")
+                except Exception as e:
+                    self.syslogger.info("Exception while syncing config mount to standby RP. Error is: "+str(e))
+                    return {"status" : "error", "output" : "Exception while syncing config mount to standby RP"}
 
 
         if self.check_docker_running(docker_container_name)["status"]:
@@ -547,7 +861,7 @@ class AppManager(ZtpHelpers):
                 else:
                     self.syslogger.info("Docker app successfully launched")
                     # Check if the sync_to_standby flag is set
-                    if sync_to_standby:
+                    if sync_to_standby and self.standby_rp_present:
                         # Set up the current (updated) json config file for the app_manager running on standby
                         json_file_standby = self.setup_json_standby()
                         if json_file_standby["status"] == "success":
@@ -654,7 +968,7 @@ class AppManager(ZtpHelpers):
 
             if docker_image_action == "import":
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker import " +str(filepath)+ "  " + str(docker_image_name)
-                docker_image_op = self.run_bash(cmd)
+                docker_image_op = self.run_bash_timed(cmd, timeout=10)
 
                 if docker_image_op["status"]:
                     self.syslogger.info("Failed to import docker image. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))
@@ -663,7 +977,7 @@ class AppManager(ZtpHelpers):
                     self.syslogger.info("Docker image import command ran successfully")
             elif docker_image_action == "load":
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker load --input " +str(filepath)
-                docker_image_op = self.run_bash(cmd)
+                docker_image_op = self.run_bash_timed(cmd, timeout=10)
 
                 if docker_image_op["status"]:
                     self.syslogger.info("Failed to load docker tarball. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))
@@ -680,7 +994,7 @@ class AppManager(ZtpHelpers):
                 self.syslogger.info("Docker image is now available on current Active RP")
 
                 # If sync_to_standby is set, sync docker image to standby
-                if sync_to_standby:
+                if sync_to_standby and self.standby_rp_present :
                     # Copy the image tarball from the scratch folder to the same location on standby RP
                     docker_image_sync_standby = self.scp_to_standby(src_path=filepath,
                                                                     dest_path=filepath)
@@ -690,6 +1004,10 @@ class AppManager(ZtpHelpers):
                     else:
                         self.syslogger.info("Successfully set up json config file on standby RP")
                         return {"status" : "success"}
+                else:
+                    self.syslogger.info("sync_to_standby is off, not syncing docker image tar ball to standby RP")
+                    return {"status" : "success"}
+
         except Exception as e:
             self.syslogger.info("Failed to load/import Docker image. Error is "+str(e))
             return {"status" : "error", "output" : "Failed to load/import Docker image"}
@@ -704,7 +1022,7 @@ class AppManager(ZtpHelpers):
         # We don't know why the container died, so remove properly before continuing
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
-            docker_rm = self.run_bash(cmd)
+            docker_rm = self.run_bash_timed(cmd, timeout=10)
             if docker_rm["status"]:
                 self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
         except Exception as e:
@@ -712,8 +1030,8 @@ class AppManager(ZtpHelpers):
             return {"status" : "error", "output" : "Failed to remove dormant container with same name"}
 
         #Clean up any dangling images in case image was already present
-        cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\")"
-        rm_dangling_images=self.run_bash(cmd)
+        cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\") > /dev/null 2>&1"
+        rm_dangling_images=self.run_bash_timed(cmd, timeout=10)
         if rm_dangling_images["status"]:
             self.syslogger.info("Failed to remove dangling docker images, but continuing.Output: "+str(rm_dangling_images["output"])+" Error: "+str(rm_dangling_images["error"]))
         else:
@@ -746,7 +1064,7 @@ class AppManager(ZtpHelpers):
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker run "+ str(docker_mount_options)+" "+ str(docker_run_misc_options)+ " --name " +str(docker_container_name) + " " + str(docker_image_name) + " " + str(docker_cmd)
             self.syslogger.info("Docker Launch command: "+str(cmd))
-            docker_launch = self.run_bash(cmd)
+            docker_launch = self.run_bash_timed(cmd, timeout=10)
 
             if docker_launch["status"]:
                 self.syslogger.info("Failed to spin up the docker container. Output: "+str(docker_launch["output"])+", Error: "+str(docker_launch["error"]))
@@ -784,9 +1102,7 @@ if __name__ == "__main__":
         logger.info("No json config provided, aborting....")
         sys.exit(1)
     else:
-        app_manager = AppManager(syslog_server="11.11.11.2",
-                                 syslog_port=514,
-                                 syslog_file="/var/log/app_manager",
+        app_manager = AppManager(syslog_file="/var/log/app_manager",
                                  config_file=results.json_config)
 
     # Register our handler for keyboard interrupt and termination signals
