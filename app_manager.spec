@@ -46,16 +46,14 @@ cp -a apps/. %{buildroot}/misc/app_host/apps
 /misc/app_host/scratch/ima_policy 
 
 %post
-# Run master installation script for all apps under /misc/app_host/apps
-/misc/app_host/apps/install_all_apps.sh
 
-chkconfig --add app_manager
 # Mutiple files can be specified for scp to standby
 %{_sbindir}/exr_system_helper.py --file /etc/rc.d/init.d/app_manager --file %{_sbindir}/app_manager.py --file /etc/logrotate.d/app_manager.conf
 
+# Add app_manager service to chkconfig to run on reloads of either RP
+chkconfig --add app_manager
 # exr_system_helper.py can be used to run bash commands on standby RP XR LXC. Use this to create directories before trying to copy them over scp.
 # Remember, bash commands are always executed at the end by exr_system_helper.py. So decouple bash commands that are a prerequisite for any scp operation
-
 %{_sbindir}/exr_system_helper.py --cmd "chkconfig --add app_manager"
 
 # exr_system_helper.py can be used to run bash commands on standby. Use this to create directories before trying to copy them over scp
@@ -63,15 +61,18 @@ chkconfig --add app_manager
 %{_sbindir}/exr_system_helper.py --directory /etc/app_manager/
 
 
+# Sync artifacts and config files for apps to standby
 %{_sbindir}/exr_system_helper.py --cmd "mkdir -p /misc/app_host/apps"
 %{_sbindir}/exr_system_helper.py --directory /misc/app_host/apps
+
+# Run master installation script for all apps under /misc/app_host/apps on active and stanbdy
+/misc/app_host/apps/install_all_apps.sh
 %{_sbindir}/exr_system_helper.py --cmd "/misc/app_host/apps/install_all_apps.sh"
 
 
 # Finally start the app_manager on active RP and on Standby RP (if present)
 service app_manager restart
 %{_sbindir}/exr_system_helper.py --cmd "service app_manager restart"
-
 
 
 # Fix ima_policy on Standby and Active host layers.

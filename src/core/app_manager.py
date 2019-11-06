@@ -968,7 +968,7 @@ class AppManager(ZtpHelpers):
 
             if docker_image_action == "import":
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker import " +str(filepath)+ "  " + str(docker_image_name)
-                docker_image_op = self.run_bash_timed(cmd, timeout=10)
+                docker_image_op = self.run_bash(cmd, timeout=10)
 
                 if docker_image_op["status"]:
                     self.syslogger.info("Failed to import docker image. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))

@@ -10,8 +10,11 @@ rm -rf ${cwd}/RPMS/*
 rm -f ${VERSION}.tar.gz > /dev/null 2>&1
 cd $cwd/build && tar -czvf ${VERSION}.tar.gz ../src/*  
 
+
 docker rm -f wrl7_rpm_build > /dev/null 2>&1
-docker run -itd --rm  --name $build_container_name -v ${cwd}/app_manager.spec:/root/app_manager.spec -v ${cwd}/build/${VERSION}.tar.gz:/usr/src/rpm/SOURCES/${VERSION}.tar.gz -v ${cwd}/RPMS:/root/RPMS/ -v ${cwd}/build/:/tmp/ akshshar/xr-wrl7:0.1.1 /usr/sbin/build_rpm.sh -s /root/app_manager.spec 
+docker run -itd --rm  --name $build_container_name -v ${cwd}:/root/cwd akshshar/xr-wrl7:latest /root/cwd/build_chown.sh root root
+docker rm -f $build_container_name 
+docker run -itd --rm  --name $build_container_name -v ${cwd}/app_manager.spec:/usr/src/rpm/SPECS/app_manager.spec -v ${cwd}/build/${VERSION}.tar.gz:/usr/src/rpm/SOURCES/${VERSION}.tar.gz -v ${cwd}/RPMS:/root/RPMS/ -v ${cwd}/build/:/tmp/ akshshar/xr-wrl7:latest /usr/sbin/build_rpm.sh -s /usr/src/rpm/SPECS/app_manager.spec 
 
 echo -ne "\nBuilding ."
 while true 
@@ -29,6 +32,10 @@ do
       break
   fi 
 done
+
+# Change back the permissions of mounted folders post build
+docker run -itd --rm  --name $build_container_name -v ${cwd}:/root/cwd akshshar/xr-wrl7:latest /root/cwd/build_chown.sh `id -u` `id -g`
+docker rm -f $build_container_name
 
 echo "# Artifacts during the build process appear in this directory" > ${cwd}/build/README.md
 echo "# RPMS built successfully appear here" > ${cwd}/RPMS/README.md
