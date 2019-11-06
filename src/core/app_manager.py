@@ -977,7 +977,7 @@ class AppManager(ZtpHelpers):
                     self.syslogger.info("Docker image import command ran successfully")
             elif docker_image_action == "load":
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker load --input " +str(filepath)
-                docker_image_op = self.run_bash_timed(cmd, timeout=10)
+                docker_image_op = self.run_bash(cmd)
 
                 if docker_image_op["status"]:
                     self.syslogger.info("Failed to load docker tarball. Output: "+str(docker_image_op["output"])+", Error: "+str(docker_image_op["error"]))
@@ -1022,7 +1022,7 @@ class AppManager(ZtpHelpers):
         # We don't know why the container died, so remove properly before continuing
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
-            docker_rm = self.run_bash_timed(cmd, timeout=10)
+            docker_rm = self.run_bash(cmd)
             if docker_rm["status"]:
                 self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
         except Exception as e:
@@ -1031,7 +1031,7 @@ class AppManager(ZtpHelpers):
 
         #Clean up any dangling images in case image was already present
         cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\") > /dev/null 2>&1"
-        rm_dangling_images=self.run_bash_timed(cmd, timeout=10)
+        rm_dangling_images=self.run_bash(cmd)
         if rm_dangling_images["status"]:
             self.syslogger.info("Failed to remove dangling docker images, but continuing.Output: "+str(rm_dangling_images["output"])+" Error: "+str(rm_dangling_images["error"]))
         else:
@@ -1064,7 +1064,7 @@ class AppManager(ZtpHelpers):
         try:
             cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker run "+ str(docker_mount_options)+" "+ str(docker_run_misc_options)+ " --name " +str(docker_container_name) + " " + str(docker_image_name) + " " + str(docker_cmd)
             self.syslogger.info("Docker Launch command: "+str(cmd))
-            docker_launch = self.run_bash_timed(cmd, timeout=10)
+            docker_launch = self.run_bash(cmd)
 
             if docker_launch["status"]:
                 self.syslogger.info("Failed to spin up the docker container. Output: "+str(docker_launch["output"])+", Error: "+str(docker_launch["error"]))

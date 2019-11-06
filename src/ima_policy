@@ -1,0 +1,130 @@
+#
+# NOTE: When new pseudo filesystem types are added,
+# this list must be updated.
+#
+#    debugfs:      0x64626720
+dont_measure    fsmagic=0x64626720
+dont_appraise   fsmagic=0x64626720
+#    procfs:       0x9fa0
+dont_measure    fsmagic=0x9fa0
+dont_appraise   fsmagic=0x9fa0
+#    sysfs:        0x62656572
+dont_measure    fsmagic=0x62656572
+dont_appraise   fsmagic=0x62656572
+#    ramfs:        0x858458f6
+dont_measure    fsmagic=0x858458f6
+dont_appraise   fsmagic=0x858458f6
+#    securityfs:   0x73636673
+dont_measure    fsmagic=0x73636673
+dont_appraise   fsmagic=0x73636673
+# DEVPTS_SUPER_MAGIC
+dont_measure  fsmagic=0x1cd1
+dont_appraise fsmagic=0x1cd1
+# BINFMTFS_MAGIC
+dont_measure fsmagic=0x42494e4d
+dont_appraise fsmagic=0x42494e4d
+# SELINUX_MAGIC
+dont_measure fsmagic=0xf97cff8c
+dont_appraise fsmagic=0xf97cff8c
+# TMPFS_MAGIC
+dont_measure fsmagic=0x01021994
+dont_appraise fsmagic=0x01021994
+# FUSE_SUPER_MAGIC
+dont_measure fsmagic=0x65735546
+dont_appraise fsmagic=0x65735546
+# No appraise. Minimize the costs.
+dont_appraise
+# If SELinux is enabled, we get a chance for not measuring some files in /var/log/.
+dont_measure obj_type=var_log_t
+dont_appraise obj_type=var_log_t
+dont_measure obj_type=auditd_log_t
+dont_appraise obj_type=auditd_log_t
+dont_measure obj_type=initrc_var_log_t
+dont_appraise obj_type=initrc_var_log_t
+# ANON_INODE_FS_MAGIC
+dont_measure fsmagic=0x09041934
+dont_appraise fsmagic=0x09041934
+# CGROUP_SUPER_MAGIC
+dont_measure fsmagic=0x27e0eb
+dont_appraise fsmagic=0x27e0eb
+# EFIVARFS_MAGIC
+dont_measure fsmagic=0xde5e81e4
+dont_appraise fsmagic=0xde5e81e4
+# FUTEXFS_SUPER_MAGIC
+dont_measure fsmagic=0xBAD1DEA
+dont_appraise fsmagic=0xBAD1DEA
+# MTD_INODE_FS_MAGIC
+dont_measure fsmagic=0x11307854
+dont_appraise fsmagic=0x11307854
+# NSFS_MAGIC
+dont_measure fsmagic=0x6e736673
+dont_appraise fsmagic=0x6e736673
+# PIPEFS_MAGIC
+dont_measure fsmagic=0x50495045
+dont_appraise fsmagic=0x50495045
+# PROC_SUPER_MAGIC
+dont_measure fsmagic=0x9fa0
+dont_appraise fsmagic=0x9fa0
+# RAMFS_MAGIC
+dont_measure fsmagic=0x858458f6
+dont_appraise fsmagic=0x858458f6
+# SECURITYFS_MAGIC
+dont_measure fsmagic=0x73636673
+dont_appraise fsmagic=0x73636673
+# SOCKFS_MAGIC
+dont_measure fsmagic=0x534F434B
+dont_appraise fsmagic=0x534F434B
+# SYSFS_MAGIC
+dont_measure fsmagic=0x62656572
+dont_appraise fsmagic=0x62656572
+# USBDEVICE_SUPER_MAGIC
+dont_measure fsmagic=0x9fa2
+dont_appraise fsmagic=0x9fa2
+# - runtime files
+dont_measure obj_type=auditd_var_run_t
+dont_appraise obj_type=auditd_var_run_t
+dont_measure obj_type=etc_runtime_t
+dont_appraise obj_type=etc_runtime_t
+dont_measure obj_type=system_dbusd_var_run_t
+dont_appraise obj_type=system_dbusd_var_run_t
+dont_measure obj_type=virt_var_run_t
+dont_appraise obj_type=virt_var_run_t
+dont_measure obj_type=mount_var_run_t
+dont_appraise obj_type=mount_var_run_t
+dont_measure obj_type=initrc_var_run_t
+dont_appraise obj_type=initrc_var_run_t
+# system file
+dont_measure obj_type=pam_var_run_t
+dont_appraise obj_type=pam_var_run_t
+dont_measure obj_type=sshd_var_run_t
+dont_appraise obj_type=sshd_var_run_t
+dont_measure obj_type=var_lib_t
+dont_appraise obj_type=var_lib_t
+dont_measure obj_type=var_lock_t
+dont_appraise obj_type=var_lock_t
+dont_measure obj_type=var_run_t
+dont_appraise obj_type=var_run_t
+dont_measure obj_type=var_t
+dont_appraise obj_type=var_t
+# - tmp files
+dont_measure obj_type=initrc_tmp_t
+dont_appraise obj_type=initrc_tmp_t
+dont_measure obj_type=logrotate_tmp_t
+dont_appraise obj_type=logrotate_tmp_t
+dont_measure obj_type=tmp_t
+dont_appraise obj_type=tmp_t
+# temp fix, please see CSCvm10036 for detail. can't put here
+dont_measure obj_type=unlabeled_t
+dont_appraise obj_type=unlabeled_t
+measure subj_user=system_u func=FILE_CHECK mask=MAY_READ
+measure subj_role=system_r func=FILE_CHECK mask=MAY_READ
+# DEFAULT MEASUREMENTS
+measure func=BPRM_CHECK
+appraise func=BPRM_CHECK
+measure func=FILE_CHECK
+measure func=FILE_MMAP mask=MAY_EXEC
+appraise func=FILE_MMAP mask=MAY_EXEC
+measure func=MMAP_CHECK
+measure func=MODULE_CHECK
+# All other files
+measure func=FILE_CHECK mask=MAY_READ uid=0
