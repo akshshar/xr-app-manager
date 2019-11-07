@@ -765,7 +765,7 @@ class AppManager(ZtpHelpers):
             self.syslogger.info("Removing app")
             try:
                 cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
-                docker_rm = self.run_bash_timed(cmd, timeout=10)
+                docker_rm = self.run_bash(cmd)
                 if docker_rm["status"]:
                     self.syslogger.info("Failed to run docker rm -f command on container app, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
             except Exception as e:
@@ -837,6 +837,16 @@ class AppManager(ZtpHelpers):
             self.syslogger.info("Skip app bringup, app already running")
             return {"status" : "success", "output" : "Docker container already running"}
         else:
+            # We don't know why the container is not running or why it died,  so remove before trying to launch again 
+            try:
+                cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
+                docker_rm = self.run_bash(cmd)
+                if docker_rm["status"]:
+                    self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
+            except Exception as e:
+                self.syslogger.info("Failed to remove dormant container with same name. Error is: " +str(e))
+                return {"status" : "error", "output" : "Failed to remove dormant container with same name"}
+
             image_setup = self.fetch_docker_image(app_id,
                                                   docker_scratch_folder,
                                                   docker_image_name,
@@ -887,6 +897,19 @@ class AppManager(ZtpHelpers):
         # a standby RP that just become active (filepath only option as set up by THEN active RP).
         # Start with filepath first, only then fall to url, then registry.
 
+        # Owing to the small size of the /misc/app_host volume that is used for docker on XR,
+        # Clean up existing image with existing name. We always try to load/import image since
+        # an updated image may have become available.
+
+        try:
+            cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi "+str(docker_image_name)+" > /dev/null 2>&1"
+            rm_image=self.run_bash(cmd)
+            if rm_image["status"]:
+                self.syslogger.info("Failed to run docker rmi on existing docker image with name: "+str(docker_image_name)+", but continuing.Output: "+str(rm_image["output"])+" Error: "+str(rm_image["error"]))
+            else:
+                self.syslogger.info("Removed existing docker image with name: "+str(docker_image_name))
+        except Exception as e:
+            self.syslogger.info("Failed to remove existing docker image with name: "+str(docker_image_name)) 
 
         # Copy docker image tarball to scratch folder and load/import it
         try:
@@ -918,22 +941,22 @@ class AppManager(ZtpHelpers):
                     if docker_image_url is not None:
                         docker_download = self.download_file(docker_image_url, destination_folder=docker_scratch_folder)
 
-                    if docker_download["status"] == "error":
-                        self.syslogger.info("Failed to download docker container tar ball")
-                        return {"status" : "error", "output" : "Failed to download docker tar ball from url"}
-                    else:
-                        filename = docker_download["filename"]
-                        folder = docker_download["folder"]
-                        filepath = os.path.join(folder, filename)
-
-                        # Update the filepath to reflect the scratch folder location
-                        update_app = self.update_docker_config(app_id, key="docker_image_filepath", value=filepath)
-
-                        if update_app["status"] == "error":
-                            self.syslogger.info("App_id: "+str(app_id)+"Failed to update app configuration, aborting...")
-                            return {"status": "error",  "output" : "App_id: "+str(app_id)+"Failed to update app configuration, aborting..."}
+                        if docker_download["status"] == "error":
+                            self.syslogger.info("Failed to download docker container tar ball")
+                            return {"status" : "error", "output" : "Failed to download docker tar ball from url"}
                         else:
-                            self.syslogger.info("App_id: "+str(app_id)+"Successfully updated app configuration ")
+                            filename = docker_download["filename"]
+                            folder = docker_download["folder"]
+                            filepath = os.path.join(folder, filename)
+
+                            # Update the filepath to reflect the scratch folder location
+                            update_app = self.update_docker_config(app_id, key="docker_image_filepath", value=filepath)
+
+                            if update_app["status"] == "error":
+                                self.syslogger.info("App_id: "+str(app_id)+"Failed to update app configuration, aborting...")
+                                return {"status": "error",  "output" : "App_id: "+str(app_id)+"Failed to update app configuration, aborting..."}
+                            else:
+                                self.syslogger.info("App_id: "+str(app_id)+"Successfully updated app configuration ")
 
             elif docker_image_url is not None:
                 docker_download = self.download_file(docker_image_url, destination_folder=docker_scratch_folder)
@@ -1020,14 +1043,14 @@ class AppManager(ZtpHelpers):
                                 docker_cmd=None,
                                 docker_run_misc_options=None):
         # We don't know why the container died, so remove properly before continuing
-        try:
-            cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
-            docker_rm = self.run_bash(cmd)
-            if docker_rm["status"]:
-                self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
-        except Exception as e:
-            self.syslogger.info("Failed to remove dormant container with same name. Error is: " +str(e))
-            return {"status" : "error", "output" : "Failed to remove dormant container with same name"}
+        #try:
+        #    cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rm -f "+str(docker_container_name)+ " > /dev/null 2>&1"
+        #    docker_rm = self.run_bash(cmd)
+        #    if docker_rm["status"]:
+        #        self.syslogger.info("Failed to run docker rm -f command on dormant container, container might not exist - Ignoring.... Output: "+str(docker_rm["output"])+", Error: "+str(docker_rm["error"]))
+        #except Exception as e:
+        #    self.syslogger.info("Failed to remove dormant container with same name. Error is: " +str(e))
+        #    return {"status" : "error", "output" : "Failed to remove dormant container with same name"}
 
         #Clean up any dangling images in case image was already present
         cmd = "export DOCKER_HOST=unix:///misc/app_host/docker.sock && ip netns exec global-vrf docker rmi $(docker images --quiet --filter \"dangling=true\") > /dev/null 2>&1"

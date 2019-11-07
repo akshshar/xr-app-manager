@@ -8,7 +8,7 @@ declare -a CONFIG_FILE_LIST=("bash_trap.sh" "increment_ipv4_prefix.py" "hosts" "
 
 OPENR_CONFIG_DIR="/misc/app_host/openr/"
 mkdir -p $OPENR_CONFIG_DIR
-OPENR_ARTIFACT_DIR="/run/openr/"
+OPENR_ARTIFACT_DIR="/misc/disk1/openr/"
 mkdir -p $OPENR_ARTIFACT_DIR
 
 cwd=`dirname "$(readlink -f "$0")"`

@@ -8,7 +8,7 @@ declare -a CONFIG_FILE_LIST=("dummy.config")
 
 OPENR_CONFIG_DIR="/misc/app_host/ubuntu_iproute2/"
 mkdir -p $OPENR_CONFIG_DIR
-OPENR_ARTIFACT_DIR="/run/ubuntu_iproute2/"
+OPENR_ARTIFACT_DIR="/misc/disk1/ubuntu_iproute2/"
 mkdir -p $OPENR_ARTIFACT_DIR
 
 cwd=`dirname "$(readlink -f "$0")"`
