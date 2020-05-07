@@ -283,7 +283,22 @@ macosx:app_id_2 akshshar$
 
 ## Build the RPM
 
-Once the `src/apps` directory is set up, time to build the RPM.
+Once the `src/apps` directory is set up, time to build the RPM. You can either use the build script or Dockerfile.
+
+### Dockerfile
+
+You can use Docker to build the RPM using two simple commands.
+
+1. `docker build -t xr-app-manager-rpm  .`
+   * There are two optional build-args:
+      1.  `--build-arg version=<version>` Defaults to "0.1.0".
+      2.  `--build-arg release=<release>` Defaults to "XR_6.3.1+".
+2. `docker run -it -v $PWD/RPMS:/root/RPMS/ xr-app-manager-rpm`
+   1. Add the additonal mount of `-v $PWD/build:/tmp/` to see the build logs.
+
+The final RPM will show up in the folder `$PWD/xr-app-manager/RPMS/x86_64/`.
+
+### Build Script
 The build script is located at the root of the git repo called `build_app_manager.sh`.  This script will tar the `src/` directory, mount it into the `akshshar/xr-wrl7` docker image, build the RPM and then create the built rpm into the `RPMS/` directory at the root of the git repo.
 
 The steps are shown below:
@@ -328,8 +343,11 @@ xr-app-manager-0.1.0-XR_6.3.1+.x86_64.rpm                                       
 macosx:xr-app-manager akshshar$
 ```
 
+As the logs indicate, if there are any errors during the RPMbuild, then no RPM will be seen in the output above, and one must look at the <>/xr-app-manager/tmp/rpmbuild.log to determine the RPM build errors.
 
-```
+## Copy the RPM to the Router
+
+```shell
 [rtr3:~]$
 [rtr3:~]$ scp cisco@11.11.11.2:~/xr-app-manager-0.1.0-XR_6.3.1+.x86_64.rpm ./
 cisco@11.11.11.2's password:
@@ -337,8 +355,6 @@ xr-app-manager-0.1.0-XR_6.3.1+.x86_64.rpm     100%   25MB  25.4MB/s   00:01
 [rtr3:~]$
 
 ```
-As the logs indicate, if there are any errors during the RPMbuild, then no RPM will be seen in the output above, and one must look at the <>/xr-app-manager/tmp/rpmbuild.log to determine the RPM build errors.
-
 
 ## Installing the RPM
 
