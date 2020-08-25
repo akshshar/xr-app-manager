@@ -234,6 +234,27 @@ class AppManager(ZtpHelpers):
             return {"status" : status, "output" : out, "error" : err}
 
 
+    def xrCLI(self, cmd):
+        cmd = 'export PATH=/pkg/sbin:/pkg/bin:${PATH} && ip netns exec xrnns /pkg/bin/xr_cli -n "%s"' % cmd
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+        out, err = process.communicate()
+        if process.returncode:
+            status = "error"
+            output = "Failed to get command output"
+        else:
+            status = "success"
+
+            output_list = [] 
+            output = ""
+
+            for line in out.splitlines():
+                fixed_line = line.replace("\n", " ").strip()
+                output_list.append(fixed_line)
+                if "% Invalid input detected at '^' marker." in fixed_line:
+                    status = "error"
+                output = filter(None, output_list)  # Removing empty items 
+        return {"status": status, "output": output} 
+
     def admincmd(self, cmd=None):
 
         if cmd is None:
@@ -292,7 +313,7 @@ class AppManager(ZtpHelpers):
         '''
         # Get the current active RP node-name
         exec_cmd = "show redundancy summary"
-        show_red_summary = self.xrcmd({"exec_cmd" : exec_cmd})
+        show_red_summary = self.xrCLI(exec_cmd)
 
         if show_red_summary["status"] == "error":
              self.syslogger.info("Failed to get show redundancy summary output from XR")
@@ -387,7 +408,7 @@ class AppManager(ZtpHelpers):
 
 
 
-    def scp_to_standby(self, dir_sync=False, src_path=None, dest_path=None):
+    def scp_to_standby(self, dir_sync=False, src_path=None, dest_path=None, sync_mtu=False):
         """User defined method in Child Class
            Used to scp files from active to standby RP.
 
@@ -397,12 +418,17 @@ class AppManager(ZtpHelpers):
            :param dir_sync: Flag to sync directory using the recursive -r option for scp
            :param src_path: Source directory/file location on Active RP
            :param dest_path: Destination directory/file location on Standby RP
+           :param sync_mtu: Flag to enable changing the eth-vf1 MTU for large file syncs 
+                            between active and standby RPs
            :type src_path: str
            :type dest_path: str
            :return: Return a dictionary with status based on scp result.
                     { 'status': 'error/success' }
            :rtype: dict
         """
+
+        ethvf1_MTU = 9000
+        ethvf1_sync_MTU = 1492
 
         if any([src_path, dest_path]) is None:
             self.syslogger.info("Incorrect File path\(s\)")
@@ -419,15 +445,23 @@ class AppManager(ZtpHelpers):
             # See: http://stackoverflow.com/questions/11985008/sending-a-large-file-with-scp-to-a-certain-server-stalls-at-exactly-2112-kb
 
             # Grab original MTU of eth-vf1 in xrnns:
-            cmd = "ip netns exec xrnns cat /sys/class/net/eth-vf1/mtu"
-            mtu_value = self.run_bash(cmd)
+            # cmd = "ip netns exec xrnns cat /sys/class/net/eth-vf1/mtu"
+            # mtu_value = self.run_bash(cmd)
+            # self.syslogger.info("Gleaned current MTU of eth-vf1: " + str(mtu_value))
 
-            if mtu_value["status"]:
-                self.syslogger.info("Failed to grab MTU of eth-vf1, aborting. Output: "+str(mtu_value["output"])+", Error: "+str(mtu_value["error"]))
-            else:
-                eth_vf1_mtu = mtu_value["output"]
+            # if mtu_value["status"]:
+            #    self.syslogger.info("Failed to grab MTU of eth-vf1, aborting. Output: "+str(mtu_value["output"])+", Error: "+str(mtu_value["error"]))
+            # else:
+            #    eth_vf1_mtu = mtu_value["output"]
 
             self.syslogger.info("Transferring "+str(src_path)+" from Active RP to standby location: " +str(dest_path))
+
+            if sync_mtu:
+                eth_vf1_mtu = ethvf1_sync_MTU
+            else:
+                eth_vf1_mtu = ethvf1_MTU
+
+            self.syslogger.info("Setting eth-vf1 MTU to " +str(eth_vf1_mtu) + " for scp commands")
             if dir_sync:
                 self.syslogger.info("Copying entire directory and its subdirectories to standby")
                 self.syslogger.info("Force create destination directory, ignore error")
@@ -439,27 +473,40 @@ class AppManager(ZtpHelpers):
                 else:
                     self.syslogger.info("Successfully executed bash cmd: \""+str(cmd)+"\" on the standby RP. Output: "+str(standby_bash_cmd["output"]))
 
-                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu 1492 && ip netns exec xrnns scp -o ConnectTimeout=300 -r "+str(src_path)+ "/* root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
+                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu " + str(eth_vf1_mtu) + " && ip netns exec xrnns scp -o ConnectTimeout=300 -r "+str(src_path)+ "/* root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
             else:
                 self.syslogger.info("Copying only the source file to target file location")
-                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu 1492 && ip netns exec xrnns scp -o ConnectTimeout=300 "+str(src_path)+ " root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
+                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu " + str(eth_vf1_mtu) + " && ip netns exec xrnns scp -o ConnectTimeout=300 "+str(src_path)+ " root@" + str(standby_ip["peer_rp_ip"]) + ":" + str(dest_path)
             bash_out = self.run_bash(cmd)
 
             if bash_out["status"]:
                 self.syslogger.info("Failed to transfer file(s) to standby")
                 return {"status" : "error"}
             else:
-                # Reset MTU to original value
-                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu "+str(eth_vf1_mtu)
+                self.syslogger.info("Reset MTU to original value: " +str(ethvf1_MTU))
+                cmd = "ip netns exec xrnns ifconfig eth-vf1 mtu "+str(ethvf1_MTU)
                 bash_out = self.run_bash(cmd)
 
                 if bash_out["status"]:
                     self.syslogger.info("Failed to reset MTU on eth-vf1")
+                    cmd = "ip netns exec xrnns ifconfig eth-vf1"
+                    bash_out = self.run_bash(cmd)
+    
+                    if bash_out["status"]:
+                        self.syslogger.info("Failed to fetch eth-vf1 dump")
+                    else:
+                        self.syslogger.info(bash_out["output"])
                     return {"status" : "error"}
                 else:
+                    cmd = "ip netns exec xrnns ifconfig eth-vf1"
+                    bash_out = self.run_bash(cmd)
+
+                    if bash_out["status"]:
+                        self.syslogger.info("Failed to fetch eth-vf1 dump")
+                    else:
+                        self.syslogger.info(bash_out["output"])
                     return {"status" : "success"}
-
-
+                
     def execute_cmd_on_standby(self, cmd=None):
         """User defined method in Child Class
            Used to execute bash commands on the standby RP
@@ -794,6 +841,9 @@ class AppManager(ZtpHelpers):
                           sync_to_standby=False,
                           reload_capable=False):
 
+
+        if sync_to_standby:
+            self.syslogger.info("Sync to Standby for docker images is Set")
         # Check that the docker daemon is reachable before trying anything
         self.check_docker_engine(terminate_count=2)
 
@@ -1020,7 +1070,8 @@ class AppManager(ZtpHelpers):
                 if sync_to_standby and self.standby_rp_present :
                     # Copy the image tarball from the scratch folder to the same location on standby RP
                     docker_image_sync_standby = self.scp_to_standby(src_path=filepath,
-                                                                    dest_path=filepath)
+                                                                    dest_path=filepath,
+                                                                    sync_mtu=True)
                     if docker_image_sync_standby["status"] == "error":
                         self.syslogger.info("Failed to set up json config file on Standby RP")
                         return {"status" : "error"}
