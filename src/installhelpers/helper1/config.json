@@ -1,0 +1,49 @@
+{
+    "config": {
+        "vrf_forwarding_loop_interval": "15",
+        "socat_sessions": [
+            {
+                "id": "1",
+                "source_netns_name" : "blue",
+                "source_netns_port" : "57777",
+                "dest_netns_ip4" :  "192.168.0.101",
+                "dest_netns_port" : "57777",
+                "veth_pair": "1"
+ 
+            },
+            {
+                "id": "2",
+                "source_netns_name" : "mgmt",
+                "source_netns_port" : "57778",
+                "dest_netns_ip4" :  "192.168.0.111",
+                "dest_netns_port" : "57777",
+                "veth_pair": "2"
+            }
+        ],
+        "veth_pairs": {
+
+            "1" : {
+                  "vrf1_name" : "blue", 
+                  "vrf2_name" : "global-vrf", 
+                  "vrf1_ip_forwarding" : "enable",
+                  "vrf2_ip_forwarding" : "enable",
+                  "vlnk_number": "0", 
+                  "veth_vrf1_ip" :  "192.168.0.100",
+                  "veth_vrf2_ip" : "192.168.0.101"
+            }, 
+
+            "2" : {
+                  "vrf1_name" : "mgmt", 
+                  "vrf2_name" : "global-vrf", 
+                  "vrf1_ip_forwarding" : "enable",
+                  "vrf2_ip_forwarding" : "enable",
+                  "vlnk_number": "1", 
+                  "veth_vrf1_ip" :  "192.168.0.110",
+                  "veth_vrf2_ip" : "192.168.0.111"
+            }
+
+
+        }
+
+    }
+}
