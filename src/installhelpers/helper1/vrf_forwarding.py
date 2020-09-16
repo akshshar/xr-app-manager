@@ -341,7 +341,7 @@ class VrfForwarding(ZtpHelpers):
             ip_forwarding_enable = self.run_bash(cmd="ip netns exec "+str(netns_name)+" sysctl -w net.ipv4.ip_forward=1")
             if not ip_forwarding_enable["status"]:
                 self.syslogger.info("Successfully Enabled IPv4 forwarding for the netns: "+str(netns_name))
-                return {"status": "error", "output": True, "error": ""}
+                return {"status": "success", "output": True, "error": ""}
             else:
                 self.syslogger.info("Failed to Enable IPv4 forwarding for the netns using sysctl")
                 return {"status": "error", "output": False, "error": "Failed to Enable IPv4 forwarding for the netns using sysctl" }
@@ -363,7 +363,7 @@ class VrfForwarding(ZtpHelpers):
             ip_forwarding_enable = self.run_bash(cmd="ip netns exec "+str(netns_name)+" sysctl -w net.ipv4.ip_forward=1")
             if not ip_forwarding_enable["status"]:
                 self.syslogger.info("Successfully disabled IPv4 forwarding for the netns: "+str(netns_name))
-                return {"status": "error", "output": True, "error": ""}
+                return {"status": "success", "output": True, "error": ""}
             else:
                 self.syslogger.info("Failed to disable IPv4 forwarding for the netns using sysctl")
                 return {"status": "error", "output": False, "error": "Failed to disable IPv4 forwarding for the netns using sysctl" }
