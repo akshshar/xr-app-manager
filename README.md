@@ -525,3 +525,257 @@ To remove app_manager, run `yum remove`. This will also clean up the default dir
 
 The app manager installation also automatically sets up `chkconfig` to ensure app_manager runs on every reload.
 Further, even if your app is not designed to restart automatically post a router reload, once you use app_manager to launch it, the app_manager will ensure recovery post reload automatically.
+
+
+## Install-Helpers
+
+**New Addition**: A new addition to the xr-app-manager architecture is the support for installhelpers - essentially a set of automation scripts and "native" apps that can be installed along with the docker based apps that the xr-app-manager RPM carries. The structure for installhelpers is as follows:
+
+
+```
+aks::~/xr-app-manager$tree src/installhelpers/
+src/installhelpers/
+├── helper1
+│   ├── config.json
+│   ├── install_helper.sh
+│   ├── setup_vrfforwarding.sh
+│   └── vrf_forwarding.py
+└── run_installhelpers.sh
+
+1 directory, 5 files
+aks::~/xr-app-manager$
+```
+
+Under `/src` the installhelpers directory is provided. The user can create their own helper scripts/apps by populating the `helper<id>` directories. 
+Note: Only the directories with the name in the format "helper<id>", i.e. helper1, helper2 etc. will be considered by the installation scripts at the time of RPM install.
+
+When the xr-app-manager RPM is installed, the `run_installhelpers.sh` script is run within the `src/installhelpers` directory and this script in turn invokes the `install_helper.sh` script in each helper directory. The user is free to follow any installation technique of their choice as part of the `install_helper.sh` script.
+
+### Install-Helper Example:  VRF Port-forwarding
+
+While the xr-app-manager itself can be used to package, spin-up and manager docker-based apps as described in earlier sections, it is often useful to have native automation/scripting capabilities that could be leveraged at the time of install, and if needed across reloads and RPFOs on the router.
+
+One such use case involves a customer that has the Management interface configured in a Mgmt vrf and has other apps (docker apps, grpc sessions) runnng in the default/global-vrf.
+The requirement is to allow the customer to forward the useful sockets/ports from the global-vrf network namespace to the management vrf without any configuration changes required to either leak routes or juggle around with complex features.
+
+For this purpose, we use the following procedure in designing the vrf-port-forwarding helper application:
+1) The app creates and manages a pair of virtual interfaces that are part of a "veth-pair" in the XR router's Linux kernel
+2) One end of the veth pair resides in one VRF/netns (for e.g. Mgmt vrf)
+3) The other end of the veth pair resides in another VRF/netns (for e.g. global-vrf)
+4) A /31 private IP address space is selected to configure the 2 ends of the veth-pair that are in different VRFs.
+5) A "socat" session is used to port-forward selected sessions (TCP in this case) from one vrf to another using the reachable /31 ip address of the veth peer.
+6) The Application is designed to be self sufficient in terms of handling router events such as RPFOs, netns/vrf creation/deletion and reloads.
+
+The basic structure of the helper app can be seen in the `helper1` directory:
+
+```
+aks::$ tree src/installhelpers/helper1/
+src/installhelpers/helper1/
+├── config.json
+├── install_helper.sh
+├── setup_vrfforwarding.sh
+└── vrf_forwarding.py
+
+
+```
+
+Herein:
+    *  `config.json`:   This is a JSON input file for the vrf-forwarding helper application that defines the vrfs, the private ip addresses to use for forwarding and the ports/sockets to forward as part of the socat command.
+    *  `install_helper.sh`:  This script is utilized at the time of installation of the xr-app-manager to set up the directory structure for the helper application, move the sysvinit files to the right location and enable chkconfig for the app to withstand router reloads.
+    *  `setup_vrfforwading.sh`:  This is the sysvinit script that runs the `vrf_forwarding.py` script as a service across reloads, power-cycles etc.
+    *  `vrf_forwarding.py`:  This is the core of the application that takes `config.json` as input, processes the json, sets up the veth-pairs across vrfs and opens up the socat sessions as dictated by the user in config.json.
+    
+    
+ #### Sample Run of vrf_forwarding.py
+ 
+ A sample config.json is provided in the repo for `vrf_forwarding.py` as shown below:
+ 
+ ```
+ aks::~/xr-app-manager$cat src/installhelpers/helper1/config.json 
+{
+    "config": {
+        "vrf_forwarding_loop_interval": "15",
+        "socat_sessions": [
+            {
+                "id": "1",
+                "source_netns_name" : "blue",
+                "source_netns_port" : "57777",
+                "dest_netns_ip4" :  "192.168.0.101",
+                "dest_netns_port" : "57777",
+                "veth_pair": "1"
+ 
+            },
+            {
+                "id": "2",
+                "source_netns_name" : "mgmt",
+                "source_netns_port" : "57778",
+                "dest_netns_ip4" :  "192.168.0.111",
+                "dest_netns_port" : "57777",
+                "veth_pair": "2"
+            }
+        ],
+        "veth_pairs": {
+
+            "1" : {
+                  "vrf1_name" : "blue", 
+                  "vrf2_name" : "global-vrf", 
+                  "vrf1_ip_forwarding" : "enable",
+                  "vrf2_ip_forwarding" : "enable",
+                  "vlnk_number": "0", 
+                  "veth_vrf1_ip" :  "192.168.0.100",
+                  "veth_vrf2_ip" : "192.168.0.101"
+            }, 
+
+            "2" : {
+                  "vrf1_name" : "mgmt", 
+                  "vrf2_name" : "global-vrf", 
+                  "vrf1_ip_forwarding" : "enable",
+                  "vrf2_ip_forwarding" : "enable",
+                  "vlnk_number": "1", 
+                  "veth_vrf1_ip" :  "192.168.0.110",
+                  "veth_vrf2_ip" : "192.168.0.111"
+            }
+
+
+        }
+
+    }
+}
+aks::~/xr-app-manager$
+ 
+ ```
+ 
+The json file helps define the socat_session parameters along with the veth pairs that must be set up before the socat sessions are launched.
+
+When xr-app-manager is installed as an RPM in XR shell, following logs are thrown during the installation (you can modify these to be less verbose if needed):
+
+```
+
+###################   O/P Snipped   #######################
+
+
++++ readlink -f /misc/app_host/installhelpers/run_installhelpers.sh
+++ dirname /misc/app_host/installhelpers/run_installhelpers.sh
++ cwd=/misc/app_host/installhelpers
++ for helper_dir in '${cwd}/*'
++ [[ -d /misc/app_host/installhelpers/helper1 ]]
++ [[ ! -L /misc/app_host/installhelpers/helper1 ]]
++ [[ /misc/app_host/installhelpers/helper1 =~ helper ]]
++ /misc/app_host/installhelpers/helper1/install_helper.sh
+config.json
+vrf_forwarding.py
+Restarting  vrf_forwarding
+VRF forwarding Service stopped successfully.
+Starting port forwarding across vrfs based on input config file
+OK
+VRF forwarding Service started successfully
+
+
+###################   O/P Snipped   #######################
+
+
+
+```
+
+This results in the following directory structure on the router post install:
+
+```
+[ios:~]$ tree /misc/app_host/installhelpers/
+/misc/app_host/installhelpers/
+|-- helper1
+|   `-- install_helper.sh
+|-- run_installhelpers.sh
+`-- vrf_forwarding
+    |-- config.json
+    `-- vrf_forwarding.py
+
+2 directories, 4 files
+[ios:~]$ 
+
+
+```
+
+with the sysvinit script set up and activated as shown:
+
+
+```
+[ios:~]$ ls -l /etc/init.d/setup_vrfforwarding 
+-rwxr-xr-x. 1 root root 3053 Sep 14 06:19 /etc/init.d/setup_vrfforwarding
+[ios:~]$ 
+[ios:~]$ chkconfig --list setup_vrfforwarding
+setup_vrfforwarding	0:off	1:off	2:on	3:on	4:on	5:on	6:off
+[ios:~]$ 
+[ios:~]$ 
+[ios:~]$ ps -ef | grep vrf_forwarding
+root     12839     1  0 14:46 ?        00:00:04 python /misc/app_host/installhelpers/vrf_forwarding/vrf_forwarding.py --json-config /misc/app_host/installhelpers/vrf_forwarding/config.json
+root     29671 28911  0 15:23 pts/8    00:00:00 grep vrf_forwarding
+[ios:~]$ 
+
+
+```
+
+As an example of the port-forwarding capability, the XR configuration contains the following:
+
+```
+RP/0/RP0/CPU0:ios#show running-config vrf
+Wed Sep 16 15:23:01.878 UTC
+vrf blue
+!
+vrf mgmt
+!
+
+RP/0/RP0/CPU0:ios#show running-config tpa
+Wed Sep 16 15:23:08.181 UTC
+tpa
+ vrf blue
+ !
+ vrf mgmt
+  address-family ipv4
+   default-route mgmt
+  !
+ !
+!
+
+RP/0/RP0/CPU0:ios#show running-config grpc
+Wed Sep 16 15:23:24.486 UTC
+grpc
+ port 57777
+!
+
+RP/0/RP0/CPU0:ios#
+
+
+```
+
+GRPC port 57777 is open in the global-vrf network namespace and `config.json` expects the port to be forwarded to VRF/Netns `blue` on port 57777 and to VRF/Netns `mgmt` on port 57778.
+
+Dumping the relevant outputs:
+
+```
+[ios:~]$ 
+[ios:~]$ netns_identify $$
+tpnns
+global-vrf
+[ios:~]$ 
+[ios:~]$ netstat -nlp | grep 57777
+tcp        0      0 0.0.0.0:57777           0.0.0.0:*               LISTEN      6942/emsd       
+[ios:~]$ 
+[ios:~]$ 
+[ios:~]$ ip netns exec blue netstat -nlp | grep 57777
+tcp        0      0 0.0.0.0:57777           0.0.0.0:*               LISTEN      9153/socat      
+[ios:~]$ 
+[ios:~]$ 
+[ios:~]$ ip netns exec mgmt netstat -nlp | grep 57778
+tcp        0      0 0.0.0.0:57778           0.0.0.0:*               LISTEN      9170/socat      
+[ios:~]$ 
+[ios:~]$ 
+[ios:~]$ 
+
+
+```
+
+As can be seen from the above outputs, port 57777 (emsd process) which is the configured gRPC port in "global-vrf" is forwarded via "socat" processes to VRF "blue" and VRF "mgmt" on ports 57777 and 57778 respectively.
+
+Further, these ports remain up across switchovers, reloads and power-cycles enabling a robust way to access useful sockets over custom VRFs/network-namespaces.
+
+
