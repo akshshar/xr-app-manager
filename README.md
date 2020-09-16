@@ -580,10 +580,10 @@ src/installhelpers/helper1/
 ```
 
 Herein:
-    *  `config.json`:   This is a JSON input file for the vrf-forwarding helper application that defines the vrfs, the private ip addresses to use for forwarding and the ports/sockets to forward as part of the socat command.
-    *  `install_helper.sh`:  This script is utilized at the time of installation of the xr-app-manager to set up the directory structure for the helper application, move the sysvinit files to the right location and enable chkconfig for the app to withstand router reloads.
-    *  `setup_vrfforwading.sh`:  This is the sysvinit script that runs the `vrf_forwarding.py` script as a service across reloads, power-cycles etc.
-    *  `vrf_forwarding.py`:  This is the core of the application that takes `config.json` as input, processes the json, sets up the veth-pairs across vrfs and opens up the socat sessions as dictated by the user in config.json.
+ *  `config.json`:   This is a JSON input file for the vrf-forwarding helper application that defines the vrfs, the private ip addresses to use for forwarding and the ports/sockets to forward as part of the socat command.
+ *  `install_helper.sh`:  This script is utilized at the time of installation of the xr-app-manager to set up the directory structure for the helper application, move the sysvinit files to the right location and enable chkconfig for the app to withstand router reloads.
+ *  `setup_vrfforwading.sh`:  This is the sysvinit script that runs the `vrf_forwarding.py` script as a service across reloads, power-cycles etc.
+ *  `vrf_forwarding.py`:  This is the core of the application that takes `config.json` as input, processes the json, sets up the veth-pairs across vrfs and opens up the socat sessions as dictated by the user in config.json.
     
     
  #### Sample Run of vrf_forwarding.py
