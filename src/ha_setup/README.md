@@ -128,6 +128,8 @@ INFO:ZTPLogger:Done!
 
 ## Use the "-c" option to check created directories/files on Standby RP
 
+First the directory:
+
 ```
 [ios:/disk0:]$
 [ios:/disk0:]$python xr7l_system_helper.py -c "ls -l /disk0\:/active_test_dir/"
@@ -145,6 +147,12 @@ total 4
 -rw-r--r--. 1 root root 20 Feb  4 09:10 active_test.txt
 
 INFO:ZTPLogger:Done!
+[ios:/disk0:]
+```
+
+Then the contents of the copied file to make sure the scp worked fine:
+
+```
 [ios:/disk0:]$python xr7l_system_helper.py -c "ls -l /disk0\:/active_test_dir/"^C
 [ios:/disk0:]$
 [ios:/disk0:]$
