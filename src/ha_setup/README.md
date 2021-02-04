@@ -200,24 +200,6 @@ INFO:ZTPLogger:Done!
 
 ```
 [ios:/disk0:]$
-[ios:/disk0:]$python xr7l_system_helper.py -c "ls /disk0\:/active_test_dir/"
-# netconf_client_ztp_lib - version 1.1 #
-INFO:ZTPLogger:Standby RP is present
-INFO:ZTPLogger:I am the current RP, take action
-INFO:ZTPLogger:Running on active RP
-source /pkg/etc/xr_startup_envs.sh && ip netns exec xrnns /pkg/bin/nodename_to_ipaddress -n 0/RP0/CPU0 2>&1
-INFO:ZTPLogger:No input file provided, checking for directories to sync...
-INFO:ZTPLogger:No input directories provided...
-INFO:ZTPLogger:Standby cmd: ip netns exec xrnns ssh -o StrictHostKeyChecking=no root@172.0.31.1 "$(< /tmp/tmplZQ_wU)"
-INFO:ZTPLogger:Successfully executed bash cmd: "ls /disk0\:/active_test_dir/" on the standby RP
-INFO:ZTPLogger:Output: 
-active_test.txt
-standby_test.txt
-
-INFO:ZTPLogger:Done!
-[ios:/disk0:]$
-[ios:/disk0:]$
-[ios:/disk0:]$
 [ios:/disk0:]$python xr7l_system_helper.py -c "ls -l /disk0\:/active_test_dir/"
 # netconf_client_ztp_lib - version 1.1 #
 INFO:ZTPLogger:Standby RP is present
