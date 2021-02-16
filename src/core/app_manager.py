@@ -106,7 +106,11 @@ class AppManager(ZtpHelpers):
                 self.syslogger.info("Failed to remove stale rpfo directory")
 
 
-        self.root_lr_user="ztp-user"
+        if "root_lr_user" in list(self.config["config"].keys()):   
+            self.root_lr_user = self.config["config"]["root_lr_user"]
+        else:
+            self.root_lr_user = "ztp-user"
+
         # Check if docker daemon is reachable
         self.check_docker_engine(start_wait_time=60, restart_count=1, terminate_count=15)
 
@@ -266,7 +270,9 @@ class AppManager(ZtpHelpers):
         if self.debug:
             self.logger.debug("Received admin exec command request: \"%s\"" % cmd)
 
-        cmd = "export AAA_USER="+self.root_lr_user+" && source /pkg/bin/ztp_helper.sh && echo -ne \""+cmd+"\\n \" | xrcmd \"admin\""
+        #cmd = "export AAA_USER="+self.root_lr_user+" && source /pkg/bin/ztp_helper.sh && echo -ne \""+cmd+"\\n \" | xrcmd \"admin\""
+
+        cmd = "export AAA_USER="+self.root_lr_user+" && export PATH=/pkg/sbin:/pkg/bin:${PATH} && echo -ne \""+cmd+"\\n \" | ip netns exec xrnns /pkg/bin/xr_cli -n \"admin\""
 
         self.syslogger.info(cmd)
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)

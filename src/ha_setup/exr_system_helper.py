@@ -28,13 +28,18 @@ class ExrSystemHelper(ZtpHelpers):
     def __init__(self,
                  syslog_file=None,
                  syslog_server=None,
-                 syslog_port=None):
+                 syslog_port=None,
+                 config_root_user=""):
 
         super(ExrSystemHelper, self).__init__(syslog_file=syslog_file,
                                              syslog_server=syslog_server,
                                              syslog_port=syslog_port)
 
-        self.root_lr_user = "ztp-user"
+        if config_root_user == "":
+            self.root_lr_user = "ztp-user"
+        else:
+            self.root_lr_user = config_root_user 
+
         standby_status = self.is_ha_setup()
         if standby_status["status"] == "success":
             if not standby_status["output"]:
@@ -76,6 +81,26 @@ class ExrSystemHelper(ZtpHelpers):
         self.exit = False
 
 
+    def xrCLI(self, cmd):
+        cmd = 'export PATH=/pkg/sbin:/pkg/bin:${PATH} && ip netns exec xrnns /pkg/bin/xr_cli -n "%s"' % cmd
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+        out, err = process.communicate()
+        if process.returncode:
+            status = "error"
+            output = "Failed to get command output"
+        else:
+            status = "success"
+
+            output_list = []
+            output = ""
+
+            for line in out.splitlines():
+                fixed_line = line.replace("\n", " ").strip()
+                output_list.append(fixed_line)
+                if "% Invalid input detected at '^' marker." in fixed_line:
+                    status = "error"
+                output = filter(None, output_list)  # Removing empty items
+        return {"status": status, "output": output}
 
     def valid_path(self, file_path):
         return os.path.isfile(file_path)
@@ -119,7 +144,7 @@ class ExrSystemHelper(ZtpHelpers):
         '''
         # Get the current active RP node-name
         exec_cmd = "show redundancy summary"
-        show_red_summary = self.xrcmd({"exec_cmd" : exec_cmd})
+        show_red_summary = self.xrCLI(cmd=exec_cmd)
 
         if show_red_summary["status"] == "error":
              self.syslogger.info("Failed to get show redundancy summary output from XR")
@@ -219,7 +244,7 @@ class ExrSystemHelper(ZtpHelpers):
         try:
             # Get the current active RP node-name
             exec_cmd = "show redundancy summary"
-            show_red_summary = self.xrcmd({"exec_cmd" : exec_cmd})
+            show_red_summary = self.xrCLI(cmd=exec_cmd) 
 
             if show_red_summary["status"] == "error":
                 self.syslogger.info("Failed to get show redundancy summary output from XR")
@@ -365,8 +390,9 @@ class ExrSystemHelper(ZtpHelpers):
         if self.debug:
             self.logger.debug("Received admin exec command request: \"%s\"" % cmd)
 
-        cmd = "export AAA_USER="+self.root_lr_user+" && source /pkg/bin/ztp_helper.sh && echo -ne \""+cmd+"\\n \" | xrcmd \"admin\""
+        #cmd = "export AAA_USER="+self.root_lr_user+" && source /pkg/bin/ztp_helper.sh && echo -ne \""+cmd+"\\n \" | xrcmd \"admin\""
 
+        cmd = "export AAA_USER="+self.root_lr_user+" && export PATH=/pkg/sbin:/pkg/bin:${PATH} && echo -ne \""+cmd+"\\n \" | ip netns exec xrnns /pkg/bin/xr_cli -n \"admin\""
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
         out, err = process.communicate()
 
@@ -632,9 +658,9 @@ class ExrSystemHelper(ZtpHelpers):
 
         try:
             # First determine the currently allocated ip address for IOS-XR lxc in xrnns namespace
-            # Show commands using Parent class helper method: xrcmd
 
-            result = self.xrcmd({"exec_cmd" : "show platform vm"})
+            exec_cmd = "show platform vm"
+            result = self.xrCLI(cmd=exec_cmd)
 
             # We first extract the XR-LXC IP from active and standby(if available) RPs:
 
@@ -1123,7 +1149,7 @@ class ExrSystemHelper(ZtpHelpers):
     def reload_current_standby(self):
         # Get the current active RP node-name
         exec_cmd = "show redundancy summary"
-        show_red_summary = self.xrcmd({"exec_cmd" : exec_cmd})
+        show_red_summary = self.xrCLI(cmd=exec_cmd) 
 
         if show_red_summary["status"] == "error":
              self.syslogger.info("Failed to get show redundancy summary output from XR")
@@ -1164,6 +1190,8 @@ if __name__ == "__main__":
                     help='Specify the bash commands to run on standby RP host')
     parser.add_argument('-r', '--standby-rp-reload', action='store_true', dest='standby_rp_reload',
                     help='Reload standby RP')
+    parser.add_argument('-u', '--user', dest='config_root_user',
+                    help='Specify root_lr_user to use for various operations on box')
     parser.add_argument('-v', '--verbose', action='store_true',
                     help='Enable verbose logging')
     
@@ -1176,7 +1204,7 @@ if __name__ == "__main__":
         logger.setLevel(logging.DEBUG)
 
 
-    exr_system_helper = ExrSystemHelper()
+    exr_system_helper = ExrSystemHelper(config_root_user=results.config_root_user)
     #Check if there is a standby RP on the system. If not, abort.
 
     standby_ip = exr_system_helper.get_peer_rp_ip()

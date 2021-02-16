@@ -7,6 +7,8 @@ SOURCE0 : %{version}.tar.gz
 Group: 3rd party application
 Summary: XR App Manager compiled for WLR7 for IOS-XR 6.3.1+
 
+%define install_user "ztp-user"
+
 %description
 This is the set of python and sysvinit scripts for xr-app-manager for WRL7: XR 6.3.1+
 
@@ -48,33 +50,33 @@ cp -a apps/. %{buildroot}/misc/app_host/apps
 %post
 
 # Mutiple files can be specified for scp to standby
-%{_sbindir}/exr_system_helper.py --file /etc/rc.d/init.d/app_manager --file %{_sbindir}/app_manager.py --file /etc/logrotate.d/app_manager.conf
+%{_sbindir}/exr_system_helper.py --file /etc/rc.d/init.d/app_manager --file %{_sbindir}/app_manager.py --file /etc/logrotate.d/app_manager.conf --user %{install_user}
 
 # Add app_manager service to chkconfig to run on reloads of either RP
 chkconfig --add app_manager
 # exr_system_helper.py can be used to run bash commands on standby RP XR LXC. Use this to create directories before trying to copy them over scp.
 # Remember, bash commands are always executed at the end by exr_system_helper.py. So decouple bash commands that are a prerequisite for any scp operation
-%{_sbindir}/exr_system_helper.py --cmd "chkconfig --add app_manager"
+%{_sbindir}/exr_system_helper.py --cmd "chkconfig --add app_manager" --user %{install_user}
 
 # exr_system_helper.py can be used to run bash commands on standby. Use this to create directories before trying to copy them over scp
-%{_sbindir}/exr_system_helper.py --cmd "mkdir -p /etc/app_manager"
-%{_sbindir}/exr_system_helper.py --directory /etc/app_manager/
+%{_sbindir}/exr_system_helper.py --cmd "mkdir -p /etc/app_manager" --user %{install_user}
+%{_sbindir}/exr_system_helper.py --directory /etc/app_manager/ --user %{install_user}
 
 
 # Sync artifacts and config files for apps to standby
-%{_sbindir}/exr_system_helper.py --cmd "mkdir -p /misc/app_host/apps"
-%{_sbindir}/exr_system_helper.py --directory /misc/app_host/apps
+%{_sbindir}/exr_system_helper.py --cmd "mkdir -p /misc/app_host/apps" --user %{install_user}
+%{_sbindir}/exr_system_helper.py --directory /misc/app_host/apps --user %{install_user}
 
 # Run master installation script for all apps under /misc/app_host/apps on active and stanbdy
 /misc/app_host/apps/install_all_apps.sh
-%{_sbindir}/exr_system_helper.py --cmd "/misc/app_host/apps/install_all_apps.sh"
+%{_sbindir}/exr_system_helper.py --cmd "/misc/app_host/apps/install_all_apps.sh" --user %{install_user}
 
 
 # Finally start the app_manager on active RP and on Standby RP (if present)
 service app_manager restart
-%{_sbindir}/exr_system_helper.py --cmd "service app_manager restart"
+%{_sbindir}/exr_system_helper.py --cmd "service app_manager restart" --user %{install_user}
 
 
 # Fix ima_policy on Standby and Active host layers.
-%{_sbindir}/exr_system_helper.py --file /misc/app_host/scratch/ima_policy
-%{_sbindir}/exr_system_helper.py -i "cp /misc/app_host/scratch/ima_policy /etc/ima_policy" -j "cp /misc/app_host/scratch/ima_policy /etc/ima_policy"
+%{_sbindir}/exr_system_helper.py --file /misc/app_host/scratch/ima_policy --user %{install_user}
+%{_sbindir}/exr_system_helper.py -i "cp /misc/app_host/scratch/ima_policy /etc/ima_policy" -j "cp /misc/app_host/scratch/ima_policy /etc/ima_policy" --user %{install_user}

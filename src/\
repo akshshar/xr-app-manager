@@ -1,7 +1,7 @@
 {
     "config": {
         "app_manager_loop_interval": "15",
-        "root_lr_user": "ztp-user",
+        "root_lr_user" = "ztp-user",
         "apps": [
             {
                 "app_id": 2,
