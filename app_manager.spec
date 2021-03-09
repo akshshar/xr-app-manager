@@ -21,9 +21,6 @@ mkdir -p %{buildroot}%{_sbindir}
 install -m755 core/app_manager.py %{buildroot}%{_sbindir}
 install -m755 ha_setup/exr_system_helper.py %{buildroot}%{_sbindir}
 
-mkdir -p %{buildroot}/misc/app_host/scratch
-cp -a ima_policy %{buildroot}/misc/app_host/scratch/ima_policy
-
 mkdir -p %{buildroot}/etc/app_manager/
 install -m644 config.json %{buildroot}/etc/app_manager
 
@@ -45,7 +42,6 @@ cp -a apps/. %{buildroot}/misc/app_host/apps
 /etc/rc.d/init.d/app_manager
 /etc/logrotate.d/app_manager.conf
 /misc/app_host/apps
-/misc/app_host/scratch/ima_policy 
 
 %post
 
@@ -75,8 +71,3 @@ chkconfig --add app_manager
 # Finally start the app_manager on active RP and on Standby RP (if present)
 service app_manager restart
 %{_sbindir}/exr_system_helper.py --cmd "service app_manager restart" --user %{install_user}
-
-
-# Fix ima_policy on Standby and Active host layers.
-%{_sbindir}/exr_system_helper.py --file /misc/app_host/scratch/ima_policy --user %{install_user}
-%{_sbindir}/exr_system_helper.py -i "cp /misc/app_host/scratch/ima_policy /etc/ima_policy" -j "cp /misc/app_host/scratch/ima_policy /etc/ima_policy" --user %{install_user}
